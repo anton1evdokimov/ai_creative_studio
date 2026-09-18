@@ -1,7 +1,11 @@
-langchain
+# Agent framework
 langgraph
-diffusers
-transformers
-accelerate
-pillow
-torch
+langchain-core
+langchain
+
+# Data validation
+pydantic
+
+# Apple Silicon LLM backend
+mlx
+mlx-lm
