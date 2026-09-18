@@ -1,0 +1,7 @@
+langchain
+langgraph
+diffusers
+transformers
+accelerate
+pillow
+torch

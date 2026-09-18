@@ -1,0 +1,38 @@
+# Python virtual environment
+.venv/
+.venv311/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+
+# ML models
+models/*.bin
+models/*.pt
+models/*.pth
+models/*.safetensors
+
+# HuggingFace cache
+.cache/
+.huggingface/
+
+# Generated files
+outputs/
+generated/
+results/
