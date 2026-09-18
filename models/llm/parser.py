@@ -1,6 +1,6 @@
 import json
 
-from .schemas import CreativeConcepts
+from schemas.creative import CreativeConcepts
 
 
 def parse_concepts(response: str):

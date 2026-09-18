@@ -1,8 +1,8 @@
 # LangGraph nodes: analysis, planning, generation, evaluation
-from models.llm import llm
+from models.llm.factory import create_llm
 from models.llm.parser import parse_concepts
 
-
+llm = create_llm()
 # Анализ товара
 def analyze_product(state):
 
@@ -108,5 +108,53 @@ def evaluate_images(state):
 
     state["best_image"] = best["image"]
 
+
+    return state
+
+def improve_prompt(state):
+
+    print("🔄 Improving prompt")
+
+
+    state["creative_concepts"] = [
+        concept.copy(update={
+            "style": concept.style + ", more realistic"
+        })
+        for concept in state["creative_concepts"]
+    ]
+
+
+    return state
+
+def quality_router(state):
+
+    results = state["evaluation_results"]
+
+    best_score = max(
+        item["score"]
+        for item in results
+    )
+
+    if best_score >= 0.8:
+        return "end"
+
+    return "improve"
+
+def generate_video(state):
+
+    print("🎬 Generate video")
+
+    images = state["generated_images"]
+
+    videos = []
+
+    for image in images:
+        video_path = f"{image}_video.mp4"
+
+        # пока заглушка
+        videos.append(video_path)
+
+
+    state["generated_videos"] = videos
 
     return state

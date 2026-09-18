@@ -1,23 +1,23 @@
-from typing import TypedDict, List
-from models.llm.schemas import CreativeConcept
+from typing import TypedDict, List, Dict, Any
+
+from schemas.creative import CreativeConcept
 
 
-class CreativeState(TypedDict):
-      # input
-    product_image: str
+class PipelineState(TypedDict):
+
+    # входные данные
     product_description: str
 
-    # analysis
-    product_analysis: dict
+    # результат анализа товара
+    product_analysis: Dict[str, Any]
 
-    # planning
-    creative_concepts: list[CreativeConcept]
+    # идеи от LLM
+    creative_concepts: List[CreativeConcept]
 
-    # generation
+    # будущие изображения
     generated_images: List[str]
+    
+    generated_videos: List[str]
 
-    # evaluation
-    evaluation_results: List[dict]
-
-    # output
-    best_image: str
+    # результаты оценки
+    evaluation_results: Dict[str, Any]

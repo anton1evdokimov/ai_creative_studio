@@ -5,9 +5,9 @@ from mlx_lm import load, generate
 
 class MLXBackend(LLMBackend):
 
-    def __init__(self):
+    def __init__(self, name):
         self.model, self.tokenizer = load(
-            "mlx-community/Qwen2.5-3B-Instruct-4bit"
+            name
         )
 
 
