@@ -1,5 +1,7 @@
 import platform
+import torch
 
+from models.llm.cuda_backend import CUDABackend
 from .mlx_backend import MLXBackend
 
 
@@ -8,6 +10,7 @@ def create_llm():
     system = platform.system()
 
 
+    # Mac Apple Silicon
     if system == "Darwin":
 
         print("Using MLX backend")
@@ -17,6 +20,16 @@ def create_llm():
         )
 
 
+    # NVIDIA GPU
+    if torch.cuda.is_available():
+
+        print("Using CUDA backend")
+
+        return CUDABackend(
+            "Qwen/Qwen2.5-3B-Instruct"
+        )
+
+
     raise RuntimeError(
-        "No supported LLM backend"
+        "No supported backend found"
     )

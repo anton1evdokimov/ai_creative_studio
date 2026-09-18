@@ -1,11 +1,11 @@
 from .base import LLMBackend
 
-from mlx_lm import load, generate
-
 
 class MLXBackend(LLMBackend):
 
     def __init__(self, name):
+        from mlx_lm import load, generate
+        
         self.model, self.tokenizer = load(
             name
         )
