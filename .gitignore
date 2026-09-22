@@ -36,3 +36,9 @@ models/*.safetensors
 outputs/
 generated/
 results/
+
+# LoRA training outputs
+lora/
+*.safetensors
+*.png
+*.jpg

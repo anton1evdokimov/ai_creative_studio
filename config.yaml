@@ -1,1 +1,55 @@
 # Model and service configuration
+# Optimized for Apple Silicon M1 8GB RAM
+#
+# Memory strategy on 8GB unified RAM: ONE big VLM + ONE LLM loaded at a time.
+# Therefore we intentionally use the same VLM (Qwen2-VL-2B-4bit) for THREE tasks:
+#   1) Input product image analysis (VLM analyzer)
+#   2) Generated-image scoring (replaces CLIP; extra model = more OOM risk)
+#   3) Optional image captioning.
+#
+# For pure text tasks (concepts, scoring, prompt refinement) we keep the lighter
+# text-only Qwen2.5-3B-4bit because it is faster + slightly better at reasoning.
+
+llm:
+  mlx_model: mlx-community/Qwen2.5-3B-Instruct-4bit
+  cuda_model: Qwen/Qwen2.5-3B-Instruct
+  max_tokens: 800         # raised from 500 — product analysis + refinement need more tokens
+  temperature: 0.7
+
+vlm:
+  # Vision model used for: input product analysis, generated-image scoring, captioning.
+  # On 8GB M1 you MUST use 4-bit quant. Qwen2-VL-2B works; 7B will OOM.
+  mlx_vlm_model: mlx-community/Qwen2-VL-2B-Instruct-4bit
+  max_tokens: 900
+
+diffusion:
+  # Default: SDXL-Turbo (~7GB download, 4 steps). FLUX.1-schnell is ~20GB+ and too heavy on disk.
+  # Options: sdxl-turbo | sdxl | schnell | dev
+  model: sdxl-turbo
+  quantize: 4
+  # Turbo is trained at 512; 768+ needs more RAM. Full SDXL can use 768 on 8GB.
+  width: 512
+  height: 512
+  num_inference_steps: 4
+  guidance_scale: 0.0
+  output_dir: generated
+  # LoRA is off until you train weights and set enabled: true
+  lora:
+    enabled: false
+    path: lora/xyz_hoodie
+    scale: 0.8
+    trigger: ""
+
+pipeline:
+  # How many concepts to generate from LLM
+  num_concepts: 5
+  # How many TOP concepts to actually draw (keep low for 8GB)
+  top_k_concepts: 2
+  # Evaluation threshold (0.0 = always end, no retries on 8GB to save time)
+  # Increase to e.g. 0.70 once you're happy with setup and want to enable the
+  # improve_prompt → refine_prompts → generation retry loop
+  quality_threshold: 0.0
+  # Max retries for prompt improvement (0 = disable retries on 8GB)
+  # Raise together with quality_threshold once stable.
+  max_retries: 0
+
