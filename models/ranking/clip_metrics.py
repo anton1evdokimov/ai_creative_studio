@@ -64,10 +64,10 @@ def _clip01_from_cosine(cos: float) -> float:
 
 
 class CLIPMetrics:
-    def __init__(self, model_id: str, use_aesthetic: bool = True):
+    def __init__(self, model_id: str, use_aesthetic: bool = True, device: str | None = None):
         self.model_id = model_id
         self.use_aesthetic = use_aesthetic
-        self.device = _device()
+        self.device = device or _device()
         self.dtype = torch.float16 if self.device in {"cuda", "mps"} else torch.float32
         self.model = None
         self.processor = None
@@ -113,18 +113,38 @@ class CLIPMetrics:
 
     def _to_embed(self, feat, *, image: bool) -> torch.Tensor:
         if torch.is_tensor(feat):
-            return feat
-        for attr in ("image_embeds", "text_embeds"):
-            val = getattr(feat, attr, None)
-            if val is not None and torch.is_tensor(val):
-                return val
-        pooled = getattr(feat, "pooler_output", None)
-        if pooled is not None and torch.is_tensor(pooled):
-            proj = self.model.visual_projection if image else self.model.text_projection
-            return proj(pooled.to(dtype=proj.weight.dtype))
-        if isinstance(feat, (tuple, list)) and feat and torch.is_tensor(feat[0]):
-            return feat[0]
-        raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
+            t = feat
+        else:
+            t = None
+            for attr in ("image_embeds", "text_embeds"):
+                val = getattr(feat, attr, None)
+                if val is not None and torch.is_tensor(val):
+                    t = val
+                    break
+            if t is None:
+                inner = getattr(feat, "vision_model_output" if image else "text_model_output", None)
+                pooled = getattr(feat, "pooler_output", None)
+                if pooled is None and inner is not None:
+                    pooled = getattr(inner, "pooler_output", None)
+                hs = getattr(feat, "last_hidden_state", None)
+                if hs is None and inner is not None:
+                    hs = getattr(inner, "last_hidden_state", None)
+                if pooled is None and hs is not None:
+                    pooled = hs[:, 0]
+                if pooled is not None and torch.is_tensor(pooled):
+                    proj_name = "visual_projection" if image else "text_projection"
+                    proj = getattr(self.model, proj_name, None)
+                    if proj is not None:
+                        t = proj(pooled.to(device=proj.weight.device, dtype=proj.weight.dtype))
+                    else:
+                        t = pooled
+            if t is None and isinstance(feat, (tuple, list)) and feat and torch.is_tensor(feat[0]):
+                t = feat[0]
+        if t is None:
+            raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
+        if t.dim() == 1:
+            t = t.unsqueeze(0)
+        return t
 
     @torch.inference_mode()
     def _image_embed(self, image: Image.Image) -> torch.Tensor:

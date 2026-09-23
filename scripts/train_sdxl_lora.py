@@ -231,17 +231,27 @@ def run_eval(
 
     del pipe
     unet.train()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     clipper = None
     vlm_scorer = None
+    clip_error = ""
     try:
         from models.diffusion.config import load_ranking_config
-        from models.ranking.clip_metrics import create_clip_metrics
+        from models.ranking.clip_metrics import CLIPMetrics
 
         rcfg = load_ranking_config()
-        clipper = create_clip_metrics(rcfg.get("clip_model", "openai/clip-vit-large-patch14"), use_aesthetic=True)
+        # CLIP on CPU: SDXL still occupies the GPU during train eval
+        clipper = CLIPMetrics(
+            rcfg.get("clip_model", "openai/clip-vit-large-patch14"),
+            use_aesthetic=True,
+            device="cpu",
+        )
+        print("   CLIP eval on cpu (so train GPU stays free)")
     except Exception as exc:
-        print(f"⚠️  CLIP eval skipped: {exc}")
+        clip_error = f"{type(exc).__name__}: {exc}"
+        print(f"⚠️  CLIP eval skipped: {clip_error}")
     if args.eval_vlm:
         try:
             from models.ranking.clip import VLMImageScorer
@@ -266,7 +276,8 @@ def run_eval(
                 if i_vals:
                     clip_is.append(sum(i_vals) / len(i_vals))
             except Exception as exc:
-                print(f"⚠️  CLIP score failed on {img_path.name}: {type(exc).__name__}: {exc}")
+                clip_error = f"{type(exc).__name__}: {exc}"
+                print(f"⚠️  CLIP score failed on {img_path.name}: {clip_error}")
         if vlm_scorer is not None:
             vlm = vlm_scorer.score(img_path, prompt_text=prompt, context_text=prompt)
             vlm_over.append(vlm.overall)
@@ -297,6 +308,7 @@ def run_eval(
         "vlm_overall": round(sum(vlm_over) / len(vlm_over), 4) if vlm_over else "",
         "ocr_hit": round(sum(ocr_hits) / len(ocr_hits), 4) if ocr_hits else "",
         "ocr_text": " ".join(last_ocr.split())[:180],
+        "clip_error": clip_error[:200],
         "prompt": prompt,
     }
     append_csv(out_dir / "metrics.csv", row)
