@@ -119,8 +119,9 @@ class CLIPMetrics:
         in_dim = int(proj.weight.shape[1])
         dim = int(pooled.shape[-1])
         if dim == in_dim:
-            return proj(pooled.to(device=proj.weight.device, dtype=proj.weight.dtype))
-        return pooled
+            x = pooled.detach().to(device=proj.weight.device, dtype=proj.weight.dtype)
+            return proj(x)
+        return pooled.detach()
 
     def _to_embed(self, feat, *, image: bool) -> torch.Tensor:
         if torch.is_tensor(feat):
@@ -162,7 +163,7 @@ class CLIPMetrics:
         except TypeError:
             feat = self.model.get_image_features(**inputs.to(self.device))
         feat = self._to_embed(feat, image=True)
-        return F.normalize(feat.float(), dim=-1)
+        return F.normalize(feat.float(), dim=-1).detach().clone()
 
     @torch.inference_mode()
     def _text_embed(self, text: str) -> torch.Tensor:
@@ -183,8 +184,9 @@ class CLIPMetrics:
         except TypeError:
             feat = self.model.get_text_features(input_ids=ids)
         feat = self._to_embed(feat, image=False)
-        return F.normalize(feat.float(), dim=-1)
+        return F.normalize(feat.float(), dim=-1).detach().clone()
 
+    @torch.inference_mode()
     def score(
         self,
         image_path: str | Path,
