@@ -76,6 +76,10 @@ class ProductAnalyzer:
         if p is None or not p.exists():
             if not fallback_if_missing_image and p is not None:
                 raise FileNotFoundError(p)
+            print(
+                f"   ⚠️ Image missing ({image_path!r}) — text-only fallback, "
+                "VLM did not see a photo"
+            )
             return self._text_only_fallback(user_description or "retail consumer product")
 
         # Case 2: real image -> ask VLM ---------------------------------------------------

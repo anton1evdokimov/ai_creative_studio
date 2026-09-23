@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from models.diffusion.config import load_pipeline_config, load_diffusion_config
+from models.diffusion.config import load_pipeline_config, load_diffusion_config, load_ranking_config
 from models.llm.factory import create_llm, unload_llm
 from models.llm.parser import parse_concepts, parse_concept_score
 from models.diffusion.generator import get_flux_generator, reset_flux_generator
@@ -9,9 +9,11 @@ from models.diffusion.factory import unload_image_backend
 from models.vlm.analyzer import create_product_analyzer, reset_product_analyzer
 from models.vlm.factory import unload_vlm
 from models.ranking.clip import create_image_scorer, reset_image_scorer
+from models.ranking.clip_metrics import create_clip_metrics, unload_clip_metrics
 from models.ranking.quality import analyze_quality
 from agent.refine_prompts import create_prompt_refiner, reset_prompt_refiner
 from schemas.creative import ScoredConcept
+from schemas.evaluation import ImageEvaluation
 
 _llm = None
 
@@ -50,6 +52,11 @@ def _unload_llm_weights():
     unload_llm()
     _release_mlx()
     print("   ♻️  Unloaded LLM")
+
+
+def _unload_clip_weights():
+    unload_clip_metrics()
+    print("   ♻️  Unloaded CLIP")
 
 
 def _unload_flux_weights():
@@ -310,11 +317,18 @@ def generate_images(state):
 
 
 def evaluate_images(state):
-    """Stage 6: VLM-as-judge scores each image on 6 dimensions + cheap heuristics."""
-    print("📊 [6/7] Evaluating generated images (VLM + quality heuristics)...")
+    """Stage 6: CLIP-T / CLIP-I / aesthetic (+ optional VLM-judge) + heuristics."""
+    print("📊 [6/7] Evaluating generated images...")
+    rank_cfg = load_ranking_config()
+    use_clip = bool(rank_cfg.get("clip"))
+    use_aes = bool(rank_cfg.get("aesthetic"))
+    use_vlm = bool(rank_cfg.get("vlm_judge"))
+    weights = rank_cfg.get("weights") or {}
+
     diff_cfg = load_diffusion_config()
-    target_w = int(diff_cfg.get("width", 832))
-    target_h = int(diff_cfg.get("height", 832))
+    target_w = int(diff_cfg.get("width", 512))
+    target_h = int(diff_cfg.get("height", 512))
+    product_image = state.get("product_image") or ""
 
     pa = state.get("product_analysis") or {}
     try:
@@ -322,13 +336,18 @@ def evaluate_images(state):
     except Exception:
         context_json = "luxury retail product advertisement"
 
-    scorer = create_image_scorer()
+    clipper = None
+    if use_clip:
+        clipper = create_clip_metrics(
+            rank_cfg.get("clip_model") or "openai/clip-vit-large-patch14",
+            use_aesthetic=use_aes,
+        )
 
-    # Build prompt-per-image from generation_results (prefer refined prompts)
     generation_results = state.get("generation_results") or []
     generated_images = state.get("generated_images") or []
+    gate = rank_cfg.get("vlm_gate") or {}
 
-    def _prompt_for(i: int, path: str) -> str:
+    def _prompt_for(i: int) -> str:
         if i < len(generation_results):
             gr = generation_results[i]
             if getattr(gr, "refined_prompt", None) is not None:
@@ -336,65 +355,147 @@ def evaluate_images(state):
             return getattr(gr, "prompt", "") or ""
         return ""
 
+    def _blend(clip_m, vlm_s, heur: float) -> float:
+        parts = []
+        wsum = 0.0
+
+        def add(key: str, val):
+            nonlocal wsum
+            w = float(weights.get(key, 0.0) or 0.0)
+            if w <= 0 or val is None:
+                return
+            parts.append(w * float(val))
+            wsum += w
+
+        if clip_m is not None:
+            add("clip_t", clip_m.clip_t)
+            add("clip_i", clip_m.clip_i)
+            if use_aes:
+                add("aesthetic", clip_m.aesthetic)
+        if vlm_s is not None:
+            add("vlm", vlm_s.overall)
+        add("heuristics", heur)
+        if wsum <= 0:
+            return round(float(heur or 0.0), 3)
+        return round(sum(parts) / wsum, 3)
+
+    def _passes_vlm_gate(clip_m, pre_score: float) -> bool:
+        min_t = float(gate.get("min_clip_t") or 0.0)
+        min_i = float(gate.get("min_clip_i") or 0.0)
+        min_pre = float(gate.get("min_pre_score") or 0.0)
+        if pre_score < min_pre:
+            return False
+        if clip_m is None:
+            return True
+        if clip_m.clip_t < min_t:
+            return False
+        if clip_m.clip_i is not None and clip_m.clip_i < min_i:
+            return False
+        return True
+
+    rows = []
+    for idx, path in enumerate(generated_images):
+        prompt = _prompt_for(idx)
+        print(f"   [{idx+1}/{len(generated_images)}] CLIP scoring {path.split('/')[-1]}")
+        q = analyze_quality(path, expected_width=target_w, expected_height=target_h)
+        clip_m = None
+        if clipper is not None:
+            clip_m = clipper.score(path, prompt, product_image_path=product_image or None)
+            print(
+                f"       CLIP-T={clip_m.clip_t:.2f} (cos={clip_m.clip_t_raw:.3f})"
+                + (f"  CLIP-I={clip_m.clip_i:.2f}" if clip_m.clip_i is not None else "")
+                + (f"  aesth={clip_m.aesthetic:.2f} ({clip_m.aesthetic_raw:.1f}/10)" if use_aes else "")
+            )
+        pre = _blend(clip_m, None, q["quality_factor"])
+        rows.append({
+            "idx": idx,
+            "path": path,
+            "prompt": prompt,
+            "q": q,
+            "clip_m": clip_m,
+            "pre": pre,
+            "vlm_s": None,
+        })
+        print(f"       pre-score={pre:.3f}")
+
+    if use_clip:
+        _unload_clip_weights()
+
+    vlm_idxs = []
+    if use_vlm and rows:
+        gated = [r for r in rows if _passes_vlm_gate(r["clip_m"], r["pre"])]
+        gated.sort(key=lambda r: r["pre"], reverse=True)
+        top_k = max(1, int(gate.get("top_k") or 1))
+        vlm_idxs = [r["idx"] for r in gated[:top_k]]
+        skipped = len(rows) - len(vlm_idxs)
+        print(
+            f"   VLM-judge gate: {len(vlm_idxs)}/{len(rows)} image(s) "
+            f"(top_k={top_k}, skipped {skipped})"
+        )
+        if vlm_idxs:
+            scorer = create_image_scorer()
+            for r in rows:
+                if r["idx"] not in vlm_idxs:
+                    continue
+                print(f"   VLM judging {r['path'].split('/')[-1]} (pre={r['pre']:.3f})")
+                vlm_s = scorer.score(
+                    r["path"], prompt_text=r["prompt"], context_text=context_json
+                )
+                r["vlm_s"] = vlm_s
+                print(
+                    f"       VLM: prompt={vlm_s.prompt_alignment:.2f}  "
+                    f"aesth={vlm_s.aesthetic_quality:.2f}  "
+                    f"product={vlm_s.product_accuracy:.2f}  "
+                    f"realism={vlm_s.realism:.2f}"
+                )
+                if vlm_s.feedback:
+                    print(f"       💬 {vlm_s.feedback[:140]}")
+            _unload_vlm_weights()
+        else:
+            print("   VLM-judge skipped: no image passed CLIP gate")
+
     typed_results = []
     legacy_dicts = []
     best_path: str | None = None
     best_score: float = -1.0
 
-    for idx, path in enumerate(generated_images):
-        prompt = _prompt_for(idx, path)
-        print(f"   [{idx+1}/{len(generated_images)}] scoring {path.split('/')[-1]}")
-        # 6D VLM scoring (prompt alignment, aesthetic, product accuracy, realism, brand_fit, overall)
-        typed = scorer.score_image_result(
-            image_path=path,
-            prompt_text=prompt,
-            context_text=context_json,
+    for r in rows:
+        clip_m, vlm_s, q = r["clip_m"], r["vlm_s"], r["q"]
+        final = _blend(clip_m, vlm_s, q["quality_factor"])
+        typed = ImageEvaluation(
+            image_path=r["path"],
+            prompt=r["prompt"],
+            clip_score=clip_m.clip_t if clip_m else None,
+            quality_score=q["quality_factor"],
+            clip_metrics=clip_m,
+            vlm_scores=vlm_s,
+            score=final,
         )
-        # Cheap deterministic checks (opens? resolution? blur? compression?)
-        q = analyze_quality(path, expected_width=target_w, expected_height=target_h)
-        if typed.vlm_scores:
-            final = round(0.75 * typed.vlm_scores.overall + 0.25 * q["quality_factor"], 3)
-        else:
-            final = q["quality_factor"]
-        typed.score = final  # override with blended final
         typed_results.append(typed)
-
         legacy_dicts.append({
-            "image": path,
+            "image": r["path"],
             "score": final,
-            "clip": typed.clip_score or (typed.vlm_scores.prompt_alignment if typed.vlm_scores else None),
-            "quality": typed.quality_score or q["quality_factor"],
+            "pre_score": r["pre"],
+            "vlm_gated": r["idx"] in vlm_idxs,
+            "clip": typed.clip_score,
+            "clip_t": clip_m.clip_t if clip_m else None,
+            "clip_i": clip_m.clip_i if clip_m else None,
+            "aesthetic": clip_m.aesthetic if clip_m else None,
+            "quality": q["quality_factor"],
             "blur": q.get("blur_score"),
-            "meets_resolution": q.get("meets_resolution"),
-            "size_bytes": q.get("size_bytes"),
-            "vlm_overall": typed.vlm_scores.overall if typed.vlm_scores else None,
-            "feedback": typed.vlm_scores.feedback if typed.vlm_scores else "",
-            "quality_notes": q.get("notes", []),
+            "vlm_overall": vlm_s.overall if vlm_s else None,
+            "feedback": vlm_s.feedback if vlm_s else "",
         })
+        print(f"       {r['path'].split('/')[-1]} → final={final:.3f}")
         if final > best_score:
             best_score = final
-            best_path = path
-
-        # compact one-line summary
-        sc = typed.vlm_scores
-        if sc is not None:
-            print(
-                f"       VLM: prompt={sc.prompt_alignment:.2f}  "
-                f"aesth={sc.aesthetic_quality:.2f}  "
-                f"product={sc.product_accuracy:.2f}  "
-                f"realism={sc.realism:.2f}  →  OVERALL={final:.3f}"
-            )
-            if sc.feedback:
-                print(f"       💬 {sc.feedback[:140]}")
-        else:
-            print(f"       heuristics only → final={final:.3f}")
+            best_path = r["path"]
 
     state["evaluation_typed"] = typed_results
     state["evaluation_results"] = legacy_dicts
     if best_path:
         state["best_image"] = best_path
         print(f"\n   🏆 Best image: {best_path.split('/')[-1]}   (final={best_score:.3f})")
-    _unload_vlm_weights()
     return state
 
 

@@ -99,6 +99,36 @@ def load_vlm_config() -> dict:
     return {**defaults, **config}
 
 
+def load_ranking_config() -> dict:
+    data = _load_root_config()
+    config = data.get("ranking") or {}
+    defaults = {
+        "clip": True,
+        "aesthetic": True,
+        "vlm_judge": False,
+        "vlm_gate": {
+            "min_clip_t": 0.55,
+            "min_clip_i": 0.45,
+            "min_pre_score": 0.55,
+            "top_k": 1,
+        },
+        "clip_model": "openai/clip-vit-large-patch14",
+        "weights": {
+            "clip_t": 0.35,
+            "clip_i": 0.25,
+            "aesthetic": 0.15,
+            "vlm": 0.15,
+            "heuristics": 0.10,
+        },
+    }
+    merged = {**defaults, **config}
+    wsrc = config.get("weights") if isinstance(config.get("weights"), dict) else {}
+    merged["weights"] = {**defaults["weights"], **wsrc}
+    gsrc = config.get("vlm_gate") if isinstance(config.get("vlm_gate"), dict) else {}
+    merged["vlm_gate"] = {**defaults["vlm_gate"], **gsrc}
+    return merged
+
+
 def load_pipeline_config() -> dict:
     data = _load_root_config()
     config = data.get("pipeline") or {}

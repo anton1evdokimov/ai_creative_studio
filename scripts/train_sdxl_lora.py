@@ -17,11 +17,17 @@ Example:
       --instance_data_dir data/lora/hoodies \\
       --instance_prompt "a photo of xyz hoodie" \\
       --output_dir lora/xyz_hoodie \\
-      --max_train_steps 500 --rank 8 --resolution 512
+      --max_train_steps 500 --rank 8 --resolution 512 \\
+      --eval_every 100
+
+Watch CLIP-T / CLIP-I in output_dir/metrics.csv (not train MSE) to pick a checkpoint.
+Optional: --eval_vlm (heavy, skip on 8GB) and --eval_ocr (needs pytesseract + tesseract).
 """
 from __future__ import annotations
 
 import argparse
+import csv
+import sys
 from pathlib import Path
 
 import torch
@@ -30,6 +36,10 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 from tqdm import tqdm
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
@@ -119,7 +129,176 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--checkpointing_steps", type=int, default=100)
     p.add_argument("--mixed_precision", choices=["no", "fp16", "bf16"], default="no")
+    p.add_argument("--eval_every", type=int, default=100, help="Generate+score every N steps (0=off)")
+    p.add_argument("--eval_prompt", default="", help="Prompt for eval images; default = instance_prompt")
+    p.add_argument("--eval_num_images", type=int, default=1)
+    p.add_argument("--eval_inference_steps", type=int, default=8)
+    p.add_argument("--eval_guidance", type=float, default=5.0)
+    p.add_argument("--eval_vlm", action="store_true", help="Also run VLM-as-judge (heavy)")
+    p.add_argument("--eval_ocr", action="store_true", help="OCR generated image (pytesseract)")
+    p.add_argument("--ocr_terms", default="", help="Comma-separated words that should appear on the product")
     return p.parse_args()
+
+
+def append_csv(path: Path, row: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def ocr_image(image: Image.Image) -> str:
+    try:
+        import pytesseract
+    except ImportError:
+        return ""
+    try:
+        return pytesseract.image_to_string(image) or ""
+    except Exception:
+        return ""
+
+
+def ocr_hit_rate(text: str, terms: list[str]) -> float:
+    if not terms:
+        return 0.0
+    blob = text.lower()
+    hits = sum(1 for t in terms if t and t.lower() in blob)
+    return round(hits / max(1, len(terms)), 3)
+
+
+def _ocr_terms(args) -> list[str]:
+    terms = [t.strip() for t in (args.ocr_terms or "").split(",") if t.strip()]
+    if terms:
+        return terms
+    prompt = (args.eval_prompt or args.instance_prompt).strip()
+    stop = {"a", "an", "the", "of", "photo", "image", "picture", "with", "and", "on", "in"}
+    return [w for w in prompt.replace(",", " ").split() if len(w) > 3 and w.lower() not in stop][:6]
+
+
+def run_eval(
+    *,
+    args,
+    step: int,
+    loss: float,
+    out_dir: Path,
+    train_image_paths: list[Path],
+    vae,
+    unet,
+    text_encoder_1,
+    text_encoder_2,
+    tokenizer_1,
+    tokenizer_2,
+    pretrained: str,
+) -> dict:
+    from diffusers import EulerDiscreteScheduler, StableDiffusionXLPipeline
+
+    unet.eval()
+    eval_dir = out_dir / "eval"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    prompt = (args.eval_prompt or args.instance_prompt).strip()
+    terms = _ocr_terms(args)
+    refs = train_image_paths[:4]
+
+    scheduler = EulerDiscreteScheduler.from_pretrained(pretrained, subfolder="scheduler")
+    pipe = StableDiffusionXLPipeline(
+        vae=vae,
+        text_encoder=text_encoder_1,
+        text_encoder_2=text_encoder_2,
+        tokenizer=tokenizer_1,
+        tokenizer_2=tokenizer_2,
+        unet=unet,
+        scheduler=scheduler,
+    )
+    pipe.set_progress_bar_config(disable=True)
+
+    saved: list[tuple[Path, Image.Image]] = []
+    with torch.no_grad():
+        for i in range(max(1, args.eval_num_images)):
+            image = pipe(
+                prompt=prompt,
+                num_inference_steps=int(args.eval_inference_steps),
+                guidance_scale=float(args.eval_guidance),
+                height=int(args.resolution),
+                width=int(args.resolution),
+                generator=torch.Generator(device="cpu").manual_seed(args.seed + step + i),
+            ).images[0]
+            img_path = eval_dir / f"step{step:05d}_{i}.png"
+            image.save(img_path)
+            saved.append((img_path, image))
+
+    del pipe
+    unet.train()
+
+    clipper = None
+    vlm_scorer = None
+    try:
+        from models.diffusion.config import load_ranking_config
+        from models.ranking.clip_metrics import create_clip_metrics
+
+        rcfg = load_ranking_config()
+        clipper = create_clip_metrics(rcfg.get("clip_model", "openai/clip-vit-large-patch14"), use_aesthetic=True)
+    except Exception as exc:
+        print(f"⚠️  CLIP eval skipped: {exc}")
+    if args.eval_vlm:
+        try:
+            from models.ranking.clip import VLMImageScorer
+
+            vlm_scorer = VLMImageScorer()
+        except Exception as exc:
+            print(f"⚠️  VLM judge skipped: {exc}")
+
+    clip_ts, clip_is, aesths, vlm_over, ocr_hits = [], [], [], [], []
+    last_ocr = ""
+    for img_path, image in saved:
+        if clipper is not None:
+            clip_m = clipper.score(img_path, prompt, product_image_path=refs[0] if refs else None)
+            clip_ts.append(clip_m.clip_t)
+            aesths.append(clip_m.aesthetic)
+            i_vals = []
+            for ref in refs:
+                m = clipper.score(img_path, prompt, product_image_path=ref)
+                if m.clip_i is not None:
+                    i_vals.append(m.clip_i)
+            if i_vals:
+                clip_is.append(sum(i_vals) / len(i_vals))
+        if vlm_scorer is not None:
+            vlm = vlm_scorer.score(img_path, prompt_text=prompt, context_text=prompt)
+            vlm_over.append(vlm.overall)
+        if args.eval_ocr:
+            last_ocr = ocr_image(image)
+            ocr_hits.append(ocr_hit_rate(last_ocr, terms))
+        print(
+            f"   eval {img_path.name}: "
+            f"CLIP-T={clip_ts[-1] if clip_ts else '—'} "
+            f"CLIP-I={round(clip_is[-1], 4) if clip_is else '—'}"
+        )
+
+    try:
+        from models.ranking.clip_metrics import unload_clip_metrics
+        from models.ranking.clip import reset_image_scorer
+
+        unload_clip_metrics()
+        reset_image_scorer()
+    except Exception:
+        pass
+
+    row = {
+        "step": step,
+        "loss": round(loss, 6),
+        "clip_t": round(sum(clip_ts) / len(clip_ts), 4) if clip_ts else "",
+        "clip_i": round(sum(clip_is) / len(clip_is), 4) if clip_is else "",
+        "aesthetic": round(sum(aesths) / len(aesths), 4) if aesths else "",
+        "vlm_overall": round(sum(vlm_over) / len(vlm_over), 4) if vlm_over else "",
+        "ocr_hit": round(sum(ocr_hits) / len(ocr_hits), 4) if ocr_hits else "",
+        "ocr_text": " ".join(last_ocr.split())[:180],
+        "prompt": prompt,
+    }
+    append_csv(out_dir / "metrics.csv", row)
+    print(f"   metrics → {out_dir / 'metrics.csv'}: {row}")
+    return row
 
 
 def main() -> int:
@@ -181,11 +360,18 @@ def main() -> int:
     dataset = ImageFolderCaption(data_dir, args.instance_prompt, args.resolution)
     loader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True)
     print(f"Images: {len(dataset)}")
+    if args.eval_every > 0:
+        print(f"Eval every {args.eval_every} steps → {out_dir / 'metrics.csv'} (CLIP-T / CLIP-I)")
+        if args.eval_vlm:
+            print("VLM-as-judge enabled (heavy on 8GB)")
+        if args.eval_ocr:
+            print("OCR enabled (needs pytesseract + tesseract)")
 
     tokenizers = [tokenizer_1, tokenizer_2]
     encoders = [text_encoder_1, text_encoder_2]
 
     global_step = 0
+    last_loss = 0.0
     optimizer.zero_grad(set_to_none=True)
     pbar = tqdm(total=args.max_train_steps, desc="lora")
 
@@ -229,8 +415,9 @@ def main() -> int:
                 optimizer.zero_grad(set_to_none=True)
 
             global_step += 1
+            last_loss = float(loss.item() * args.gradient_accumulation_steps)
             pbar.update(1)
-            pbar.set_postfix(loss=f"{loss.item() * args.gradient_accumulation_steps:.4f}")
+            pbar.set_postfix(loss=f"{last_loss:.4f}")
 
             if global_step % args.checkpointing_steps == 0 or global_step >= args.max_train_steps:
                 ckpt = out_dir / f"checkpoint-{global_step}"
@@ -238,6 +425,24 @@ def main() -> int:
                 unet_lora = convert_state_dict_to_diffusers(get_peft_model_state_dict(unet))
                 StableDiffusionXLPipeline.save_lora_weights(str(ckpt), unet_lora_layers=unet_lora)
                 print(f"\nSaved {ckpt}")
+
+            if args.eval_every > 0 and (
+                global_step % args.eval_every == 0 or global_step >= args.max_train_steps
+            ):
+                run_eval(
+                    args=args,
+                    step=global_step,
+                    loss=last_loss,
+                    out_dir=out_dir,
+                    train_image_paths=dataset.paths,
+                    vae=vae,
+                    unet=unet,
+                    text_encoder_1=text_encoder_1,
+                    text_encoder_2=text_encoder_2,
+                    tokenizer_1=tokenizer_1,
+                    tokenizer_2=tokenizer_2,
+                    pretrained=args.pretrained_model_name_or_path,
+                )
 
             if global_step >= args.max_train_steps:
                 break

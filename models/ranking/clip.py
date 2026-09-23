@@ -45,8 +45,8 @@ Rate the image on these 5 dimensions using a score from 0.00 (terrible) to 1.00 
 Also compute "overall" = 0.30*prompt_alignment + 0.25*aesthetic_quality + 0.20*product_accuracy
                         + 0.15*realism + 0.10*brand_fit.
 
-Also include "feedback": one short sentence explaining the single strongest weakness and the
-single strongest strength of the image.
+Also include "feedback": 1–2 short sentences in Russian (Cyrillic). Explain the single
+strongest strength and the single strongest weakness. Do not write feedback in English.
 
 Return JSON:
 {{
@@ -56,7 +56,7 @@ Return JSON:
   "realism": 0.00,
   "brand_fit": 0.00,
   "overall": 0.00,
-  "feedback": "..."
+  "feedback": "Сильная сторона: … Слабая сторона: …"
 }}
 """
 
@@ -89,7 +89,7 @@ class VLMImageScorer:
     ) -> VLMImageScores:
         p = Path(image_path)
         if not p.exists():
-            return VLMImageScores(feedback="Missing image file, scored as zeros.")
+            return VLMImageScores(feedback="Файл изображения не найден, оценка обнулена.")
 
         filled_prompt = _IMAGE_SCORING_PROMPT.format(
             prompt_text=prompt_text[:900] if prompt_text else "",
@@ -100,7 +100,8 @@ class VLMImageScorer:
             filled_prompt,
             system_prompt=(
                 "You are a critical but fair commercial art director. "
-                "Respond ONLY with valid JSON, never with commentary."
+                "Respond ONLY with valid JSON, never with commentary. "
+                "The numeric keys stay in English. The feedback string MUST be Russian."
             ),
             max_tokens=500,
             temperature=0.2,

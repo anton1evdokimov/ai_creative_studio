@@ -1,3 +1,4 @@
+import argparse
 import sys
 import time
 import traceback
@@ -30,6 +31,33 @@ BANNER = r"""
 """
 
 
+INPUT_DIR = Path(__file__).resolve().parent / "data" / "input"
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+# https://github.com/anton1evdokimov/ai_creative_studio.git
+def resolve_product_image(explicit: str | None = None) -> Path:
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if not path.is_file():
+            raise FileNotFoundError(f"Product image not found: {path}")
+        return path
+
+    files = sorted(
+        p for p in INPUT_DIR.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+    ) if INPUT_DIR.is_dir() else []
+    if not files:
+        raise FileNotFoundError(
+            f"No product image in {INPUT_DIR}. Put a jpg/png/webp there or pass --image PATH"
+        )
+    if len(files) > 1:
+        names = ", ".join(p.name for p in files)
+        print(f"⚠️  Several images in {INPUT_DIR}: {names}")
+        print(f"   Using first: {files[0].name}  (override with --image)")
+    return files[0]
+
+
 def _fmt_list(lst: list[str], n: int = 6) -> str:
     if not lst:
         return "—"
@@ -39,12 +67,24 @@ def _fmt_list(lst: list[str], n: int = 6) -> str:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="AI Creative Studio pipeline")
+    parser.add_argument(
+        "--image",
+        default=None,
+        help="Product photo path. Default: first image in data/input/",
+    )
+    parser.add_argument("--description", default="", help="Optional product text (VLM can work from photo only)")
+    args = parser.parse_args()
+
     print(BANNER)
 
     t0 = time.time()
+    product_image = resolve_product_image(args.image)
+    print(f"📷 Product image: {product_image}")
 
     input_data = {
-        "product_image": "data/input/serum.jpeg",
+        "product_image": str(product_image),
+        "product_description": args.description,
         "retry_count": 0,
     }
 
@@ -141,25 +181,21 @@ def main() -> int:
         evals_typed = result.get("evaluation_typed") or []
         evals = result.get("evaluation_results") or []
         if evals_typed or evals:
-            print("\n📊 [Stage 6] Image Evaluation (VLM-as-judge + quality heuristics)")
+            print("\n📊 [Stage 6] Image Evaluation (CLIP + aesthetic" + ("" if not any(getattr(e, "vlm_scores", None) for e in evals_typed) else " + VLM") + ")")
             if evals_typed:
-                hdr = f"  {'#':>2}  final  prompt aesth prodc realis brand     file"
+                hdr = f"  {'#':>2}  final  clipT clipI aesth   file"
                 print(hdr)
                 print("  " + "-" * (len(hdr) - 2))
                 for idx, e in enumerate(evals_typed, 1):
-                    s = e.vlm_scores
                     name = Path(e.image_path).name
                     mark = "🏆" if (e.image_path == result.get("best_image")) else "  "
-                    if s is not None:
-                        print(
-                            f"  {idx:>2} {mark} {e.score:5.3f}  "
-                            f"{s.prompt_alignment:4.2f} {s.aesthetic_quality:4.2f} "
-                            f"{s.product_accuracy:4.2f} {s.realism:4.2f} {s.brand_fit:4.2f}   {name}"
-                        )
-                        if s.feedback:
-                            print(f"           💬 {s.feedback[:160]}")
-                    else:
-                        print(f"  {idx:>2} {mark} {e.score:5.3f}  — heuristics only — {name}")
+                    cm = e.clip_metrics
+                    clip_t = f"{cm.clip_t:4.2f}" if cm else "  — "
+                    clip_i = f"{cm.clip_i:4.2f}" if (cm and cm.clip_i is not None) else "  — "
+                    aes = f"{cm.aesthetic:4.2f}" if cm else "  — "
+                    print(f"  {idx:>2} {mark} {e.score:5.3f}  {clip_t}  {clip_i}  {aes}   {name}")
+                    if e.vlm_scores and e.vlm_scores.feedback:
+                        print(f"           💬 {e.vlm_scores.feedback[:160]}")
             elif evals:
                 for e in evals:
                     print(f"  • {e.get('image')}  score={e.get('score')}")

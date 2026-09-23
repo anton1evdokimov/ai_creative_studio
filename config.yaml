@@ -53,3 +53,23 @@ pipeline:
   # Raise together with quality_threshold once stable.
   max_retries: 0
 
+ranking:
+  # CLIP-T (prompt), CLIP-I (vs product photo), LAION aesthetic on CLIP ViT-L/14
+  clip: true
+  aesthetic: true
+  # 2B VLM-as-judge is a future slot — noisy on Qwen2-VL-2B, keep off by default
+  vlm_judge: false
+  # When vlm_judge is true: run VLM only on images that already look good to CLIP.
+  vlm_gate:
+    min_clip_t: 0.55
+    min_clip_i: 0.45      # ignored if there is no product photo
+    min_pre_score: 0.55   # CLIP+aesthetic+heuristics blend before VLM
+    top_k: 1              # at most this many images go to VLM
+  clip_model: openai/clip-vit-large-patch14
+  weights:
+    clip_t: 0.35
+    clip_i: 0.25
+    aesthetic: 0.15
+    vlm: 0.15
+    heuristics: 0.10
+

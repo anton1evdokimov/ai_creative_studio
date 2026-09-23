@@ -116,8 +116,8 @@ class MockVLMBackend:
                     "brand_fit": round(bf, 3),
                     "overall": overall,
                     "feedback": (
-                        "Strong studio lighting with clean product separation. Composition is balanced, "
-                        "palette aligns with luxury cosmetics cues. Minor diffusion softness visible on edges."
+                        "Сильная сторона: чистое студийное освещение и отделение продукта. "
+                        "Слабая сторона: лёгкая diffusion-мягкость по краям."
                     ),
                 },
                 ensure_ascii=False,

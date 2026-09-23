@@ -35,10 +35,21 @@ class VLMImageScores(BaseModel):
     feedback: str = ""
 
 
+class CLIPScores(BaseModel):
+    """Deterministic CLIP metrics (cosines + LAION aesthetic)."""
+    clip_t: float = 0.0          # prompt alignment, 0..1 (CLIPScore-style)
+    clip_t_raw: float = 0.0      # raw cosine
+    clip_i: Optional[float] = None  # gen vs product photo, 0..1
+    clip_i_raw: Optional[float] = None
+    aesthetic: float = 0.0       # 0..1 (raw/10)
+    aesthetic_raw: float = 0.0   # typical 1..10 LAION scale
+
+
 class ImageEvaluation(BaseModel):
     image_path: str
     prompt: str = ""
-    clip_score: Optional[float] = None  # legacy alias (optional, kept for backwards compat
-    quality_score: Optional[float] = None  # legacy alias
+    clip_score: Optional[float] = None  # CLIP-T 0..1
+    quality_score: Optional[float] = None  # heuristics 0..1
+    clip_metrics: Optional[CLIPScores] = None
     vlm_scores: Optional[VLMImageScores] = None
-    score: float = 0.0  # final scalar score used by router (overall from VLM, 0..1)
+    score: float = 0.0  # final blended score used by router
