@@ -67,6 +67,9 @@ ranking:
   # CLIP-T (prompt), CLIP-I (vs product photo), LAION aesthetic on CLIP ViT-L/14
   clip: true
   aesthetic: true
+  # DINOv2-small: appearance/identity vs product photo (better than CLIP-I for garments)
+  dino: true
+  dino_model: facebook/dinov2-small
   # 2B VLM-as-judge is a future slot — noisy on Qwen2-VL-2B, keep off by default
   vlm_judge: false
   # When vlm_judge is true: run VLM only on images that already look good to CLIP.
@@ -77,9 +80,10 @@ ranking:
     top_k: 1              # at most this many images go to VLM
   clip_model: openai/clip-vit-large-patch14
   weights:
-    clip_t: 0.35
-    clip_i: 0.25
+    clip_t: 0.30
+    clip_i: 0.15
+    dino_i: 0.20
     aesthetic: 0.15
-    vlm: 0.15
+    vlm: 0.10
     heuristics: 0.10
 

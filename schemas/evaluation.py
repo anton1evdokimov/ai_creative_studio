@@ -43,6 +43,8 @@ class CLIPScores(BaseModel):
     clip_i_raw: Optional[float] = None
     aesthetic: float = 0.0       # 0..1 (raw/10)
     aesthetic_raw: float = 0.0   # typical 1..10 LAION scale
+    dino_i: Optional[float] = None      # DINOv2 gen vs product, 0..1 = (cos+1)/2
+    dino_i_raw: Optional[float] = None  # raw cosine
 
 
 class ImageEvaluation(BaseModel):
@@ -52,4 +54,6 @@ class ImageEvaluation(BaseModel):
     quality_score: Optional[float] = None  # heuristics 0..1
     clip_metrics: Optional[CLIPScores] = None
     vlm_scores: Optional[VLMImageScores] = None
+    dino_i: Optional[float] = None
+    dino_i_raw: Optional[float] = None
     score: float = 0.0  # final blended score used by router

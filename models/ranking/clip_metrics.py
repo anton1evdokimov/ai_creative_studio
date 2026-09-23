@@ -123,7 +123,22 @@ class CLIPMetrics:
             return proj(x)
         return pooled.detach()
 
+    def _encoder_hidden(self, feat, *, image: bool):
+        inner = getattr(feat, "vision_model_output" if image else "text_model_output", None)
+        pooled = getattr(feat, "pooler_output", None)
+        if pooled is None and inner is not None:
+            pooled = getattr(inner, "pooler_output", None)
+        hs = getattr(feat, "last_hidden_state", None)
+        if hs is None and inner is not None:
+            hs = getattr(inner, "last_hidden_state", None)
+        return pooled, hs
+
     def _to_embed(self, feat, *, image: bool) -> torch.Tensor:
+        """Map CLIP outputs into the shared 768-d (ViT-L) embedding space.
+
+        get_*_features already returns the projected vector — do not project again.
+        Encoder ModelOutput needs last_hidden (1024 for vision) then visual_projection.
+        """
         if torch.is_tensor(feat):
             t = feat
         else:
@@ -134,22 +149,22 @@ class CLIPMetrics:
                     t = val
                     break
             if t is None:
-                inner = getattr(feat, "vision_model_output" if image else "text_model_output", None)
-                pooled = getattr(feat, "pooler_output", None)
-                if pooled is None and inner is not None:
-                    pooled = getattr(inner, "pooler_output", None)
-                hs = getattr(feat, "last_hidden_state", None)
-                if hs is None and inner is not None:
-                    hs = getattr(inner, "last_hidden_state", None)
-                if pooled is None and hs is not None:
-                    pooled = hs[:, 0]
-                if pooled is not None and torch.is_tensor(pooled):
+                pooled, hs = self._encoder_hidden(feat, image=image)
+                proj = getattr(self.model, "visual_projection" if image else "text_projection", None)
+                in_dim = int(proj.weight.shape[1]) if proj is not None else None
+                # Prefer the pre-projection hidden state (ViT-L vision = 1024).
+                if hs is not None and torch.is_tensor(hs) and in_dim and int(hs.shape[-1]) == in_dim:
+                    t = self._project_if_needed(hs[:, 0], image=image)
+                elif pooled is not None and torch.is_tensor(pooled) and in_dim and int(pooled.shape[-1]) == in_dim:
                     t = self._project_if_needed(pooled, image=image)
+                elif pooled is not None and torch.is_tensor(pooled):
+                    t = pooled
+                elif hs is not None and torch.is_tensor(hs):
+                    t = self._project_if_needed(hs[:, 0], image=image)
             if t is None and isinstance(feat, (tuple, list)) and feat and torch.is_tensor(feat[0]):
                 t = feat[0]
         if t is None:
             raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
-        t = self._project_if_needed(t, image=image)
         if t.dim() == 1:
             t = t.unsqueeze(0)
         return t

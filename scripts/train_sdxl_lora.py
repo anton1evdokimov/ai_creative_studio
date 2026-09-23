@@ -261,20 +261,27 @@ def run_eval(
             print(f"⚠️  VLM judge skipped: {exc}")
 
     clip_ts, clip_is, aesths, vlm_over, ocr_hits = [], [], [], [], []
+    clip_t_raws, clip_i_raws = [], []
+    dino_is, dino_raws = [], []
     last_ocr = ""
     for img_path, image in saved:
         if clipper is not None:
             try:
                 clip_m = clipper.score(img_path, prompt, product_image_path=refs[0] if refs else None)
                 clip_ts.append(clip_m.clip_t)
+                clip_t_raws.append(clip_m.clip_t_raw)
                 aesths.append(clip_m.aesthetic)
-                i_vals = []
+                i_vals, i_raws = [], []
                 for ref in refs:
                     m = clipper.score(img_path, prompt, product_image_path=ref)
                     if m.clip_i is not None:
                         i_vals.append(m.clip_i)
+                        if m.clip_i_raw is not None:
+                            i_raws.append(m.clip_i_raw)
                 if i_vals:
                     clip_is.append(sum(i_vals) / len(i_vals))
+                if i_raws:
+                    clip_i_raws.append(sum(i_raws) / len(i_raws))
             except Exception as exc:
                 clip_error = f"{type(exc).__name__}: {exc}"
                 print(f"⚠️  CLIP score failed on {img_path.name}: {clip_error}")
@@ -287,6 +294,7 @@ def run_eval(
         print(
             f"   eval {img_path.name}: "
             f"CLIP-T={clip_ts[-1] if clip_ts else '—'} "
+            f"(raw={clip_t_raws[-1] if clip_t_raws else '—'}) "
             f"CLIP-I={round(clip_is[-1], 4) if clip_is else '—'}"
         )
 
@@ -299,16 +307,40 @@ def run_eval(
     except Exception:
         pass
 
+    dino_error = ""
+    try:
+        from models.diffusion.config import load_ranking_config
+        from models.ranking.dino_metrics import DinoMetrics, unload_dino_metrics
+
+        rcfg = load_ranking_config()
+        if refs:
+            dino = DinoMetrics(rcfg.get("dino_model") or "facebook/dinov2-small", device="cpu")
+            print("   DINOv2 eval on cpu")
+            for img_path, _image in saved:
+                s, raw = dino.similarity_mean(img_path, refs)
+                if s is not None:
+                    dino_is.append(s)
+                    dino_raws.append(raw)
+                    print(f"   eval {img_path.name}: DINO-I={s:.3f} (cos={raw:.3f})")
+            unload_dino_metrics()
+    except Exception as exc:
+        dino_error = f"{type(exc).__name__}: {exc}"
+        print(f"⚠️  DINOv2 eval skipped: {dino_error}")
+
     row = {
         "step": step,
         "loss": round(loss, 6),
         "clip_t": round(sum(clip_ts) / len(clip_ts), 4) if clip_ts else "",
+        "clip_t_raw": round(sum(clip_t_raws) / len(clip_t_raws), 4) if clip_t_raws else "",
         "clip_i": round(sum(clip_is) / len(clip_is), 4) if clip_is else "",
+        "clip_i_raw": round(sum(clip_i_raws) / len(clip_i_raws), 4) if clip_i_raws else "",
+        "dino_i": round(sum(dino_is) / len(dino_is), 4) if dino_is else "",
+        "dino_i_raw": round(sum(dino_raws) / len(dino_raws), 4) if dino_raws else "",
         "aesthetic": round(sum(aesths) / len(aesths), 4) if aesths else "",
         "vlm_overall": round(sum(vlm_over) / len(vlm_over), 4) if vlm_over else "",
         "ocr_hit": round(sum(ocr_hits) / len(ocr_hits), 4) if ocr_hits else "",
         "ocr_text": " ".join(last_ocr.split())[:180],
-        "clip_error": clip_error[:200],
+        "clip_error": (clip_error or dino_error)[:200],
         "prompt": prompt,
     }
     append_csv(out_dir / "metrics.csv", row)

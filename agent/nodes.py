@@ -306,6 +306,7 @@ def evaluate_images(state):
     use_clip = bool(rank_cfg.get("clip"))
     use_aes = bool(rank_cfg.get("aesthetic"))
     use_vlm = bool(rank_cfg.get("vlm_judge"))
+    use_dino = bool(rank_cfg.get("dino"))
     weights = rank_cfg.get("weights") or {}
 
     diff_cfg = load_diffusion_config()
@@ -338,7 +339,7 @@ def evaluate_images(state):
             return getattr(gr, "prompt", "") or ""
         return ""
 
-    def _blend(clip_m, vlm_s, heur: float) -> float:
+    def _blend(clip_m, vlm_s, heur: float, dino_i=None) -> float:
         parts = []
         wsum = 0.0
 
@@ -357,6 +358,7 @@ def evaluate_images(state):
                 add("aesthetic", clip_m.aesthetic)
         if vlm_s is not None:
             add("vlm", vlm_s.overall)
+        add("dino_i", dino_i)
         add("heuristics", heur)
         if wsum <= 0:
             return round(float(heur or 0.0), 3)
@@ -398,11 +400,31 @@ def evaluate_images(state):
             "clip_m": clip_m,
             "pre": pre,
             "vlm_s": None,
+            "dino_i": None,
+            "dino_i_raw": None,
         })
         print(f"       pre-score={pre:.3f}")
 
     if use_clip:
         _unload_clip_weights()
+
+    if use_dino and rows and product_image:
+        try:
+            from models.ranking.dino_metrics import DinoMetrics, unload_dino_metrics
+
+            dino = DinoMetrics(rank_cfg.get("dino_model") or "facebook/dinov2-small")
+            for r in rows:
+                s, raw = dino.similarity(r["path"], product_image)
+                r["dino_i"], r["dino_i_raw"] = s, raw
+                if r["clip_m"] is not None:
+                    r["clip_m"].dino_i = s
+                    r["clip_m"].dino_i_raw = raw
+                print(f"       {r['path'].split('/')[-1]} DINO-I={s:.2f} (cos={raw:.3f})")
+                r["pre"] = _blend(r["clip_m"], None, r["q"]["quality_factor"], s)
+            unload_dino_metrics()
+            print("   ♻️  Unloaded DINOv2")
+        except Exception as exc:
+            print(f"⚠️  DINOv2 skipped: {type(exc).__name__}: {exc}")
 
     vlm_idxs = []
     if use_vlm and rows:
@@ -444,7 +466,7 @@ def evaluate_images(state):
 
     for r in rows:
         clip_m, vlm_s, q = r["clip_m"], r["vlm_s"], r["q"]
-        final = _blend(clip_m, vlm_s, q["quality_factor"])
+        final = _blend(clip_m, vlm_s, q["quality_factor"], r.get("dino_i"))
         typed = ImageEvaluation(
             image_path=r["path"],
             prompt=r["prompt"],
@@ -452,6 +474,8 @@ def evaluate_images(state):
             quality_score=q["quality_factor"],
             clip_metrics=clip_m,
             vlm_scores=vlm_s,
+            dino_i=r.get("dino_i"),
+            dino_i_raw=r.get("dino_i_raw"),
             score=final,
         )
         typed_results.append(typed)
@@ -463,6 +487,8 @@ def evaluate_images(state):
             "clip": typed.clip_score,
             "clip_t": clip_m.clip_t if clip_m else None,
             "clip_i": clip_m.clip_i if clip_m else None,
+            "dino_i": r.get("dino_i"),
+            "dino_i_raw": r.get("dino_i_raw"),
             "aesthetic": clip_m.aesthetic if clip_m else None,
             "quality": q["quality_factor"],
             "blur": q.get("blur_score"),

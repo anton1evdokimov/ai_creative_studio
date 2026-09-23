@@ -128,6 +128,7 @@ def load_ranking_config() -> dict:
     defaults = {
         "clip": True,
         "aesthetic": True,
+        "dino": True,
         "vlm_judge": False,
         "vlm_gate": {
             "min_clip_t": 0.55,
@@ -136,11 +137,13 @@ def load_ranking_config() -> dict:
             "top_k": 1,
         },
         "clip_model": "openai/clip-vit-large-patch14",
+        "dino_model": "facebook/dinov2-small",
         "weights": {
-            "clip_t": 0.35,
-            "clip_i": 0.25,
+            "clip_t": 0.30,
+            "clip_i": 0.15,
+            "dino_i": 0.20,
             "aesthetic": 0.15,
-            "vlm": 0.15,
+            "vlm": 0.10,
             "heuristics": 0.10,
         },
     }
