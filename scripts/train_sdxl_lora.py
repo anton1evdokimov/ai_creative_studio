@@ -140,14 +140,41 @@ def parse_args():
     return p.parse_args()
 
 
+METRICS_FIELDS = [
+    "step",
+    "loss",
+    "clip_t",
+    "clip_t_raw",
+    "clip_i",
+    "clip_i_raw",
+    "dino_i",
+    "dino_i_raw",
+    "aesthetic",
+    "vlm_overall",
+    "ocr_hit",
+    "ocr_text",
+    "clip_error",
+    "prompt",
+]
+
+
 def append_csv(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        with path.open("r", encoding="utf-8") as fh:
+            first = fh.readline().strip()
+        expected = ",".join(METRICS_FIELDS)
+        if first and first != expected:
+            bak = path.with_suffix(path.suffix + ".old")
+            path.replace(bak)
+            print(f"⚠️  metrics.csv header changed — old file moved to {bak.name}")
     write_header = not path.exists()
+    clean = {k: row.get(k, "") for k in METRICS_FIELDS}
     with path.open("a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(fh, fieldnames=METRICS_FIELDS)
         if write_header:
             writer.writeheader()
-        writer.writerow(row)
+        writer.writerow(clean)
 
 
 def ocr_image(image: Image.Image) -> str:

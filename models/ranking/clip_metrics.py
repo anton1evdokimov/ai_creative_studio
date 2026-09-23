@@ -60,7 +60,13 @@ class AestheticMLP(nn.Module):
 
 
 def _clip01_from_cosine(cos: float) -> float:
+    """CLIPScore-style 0..1 for image–text. Saturates at cosine 0.4."""
     return round(max(0.0, min(1.0, 2.5 * max(float(cos), 0.0))), 4)
+
+
+def _pair01_from_cosine(cos: float) -> float:
+    """Image–image 0..1. Do not use CLIPScore 2.5× — typical cos is already 0.4–0.8."""
+    return round(max(0.0, min(1.0, (float(cos) + 1.0) / 2.0)), 4)
 
 
 class CLIPMetrics:
@@ -233,7 +239,7 @@ class CLIPMetrics:
             if ref.exists():
                 prod_emb = self._image_embed(Image.open(ref).convert("RGB"))
                 clip_i_raw = float((img_emb @ prod_emb.T).squeeze().cpu())
-                clip_i = _clip01_from_cosine(clip_i_raw)
+                clip_i = _pair01_from_cosine(clip_i_raw)
 
         aesthetic_raw = 0.0
         aesthetic = 0.0
