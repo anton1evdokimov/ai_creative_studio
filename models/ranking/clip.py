@@ -85,7 +85,7 @@ class VLMImageScorer:
         self,
         image_path: str | Path,
         prompt_text: str,
-        context_text: str = "luxury skincare product advertisement",
+        context_text: str = "commercial product advertisement",
     ) -> VLMImageScores:
         p = Path(image_path)
         if not p.exists():

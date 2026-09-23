@@ -254,16 +254,19 @@ def run_eval(
     last_ocr = ""
     for img_path, image in saved:
         if clipper is not None:
-            clip_m = clipper.score(img_path, prompt, product_image_path=refs[0] if refs else None)
-            clip_ts.append(clip_m.clip_t)
-            aesths.append(clip_m.aesthetic)
-            i_vals = []
-            for ref in refs:
-                m = clipper.score(img_path, prompt, product_image_path=ref)
-                if m.clip_i is not None:
-                    i_vals.append(m.clip_i)
-            if i_vals:
-                clip_is.append(sum(i_vals) / len(i_vals))
+            try:
+                clip_m = clipper.score(img_path, prompt, product_image_path=refs[0] if refs else None)
+                clip_ts.append(clip_m.clip_t)
+                aesths.append(clip_m.aesthetic)
+                i_vals = []
+                for ref in refs:
+                    m = clipper.score(img_path, prompt, product_image_path=ref)
+                    if m.clip_i is not None:
+                        i_vals.append(m.clip_i)
+                if i_vals:
+                    clip_is.append(sum(i_vals) / len(i_vals))
+            except Exception as exc:
+                print(f"⚠️  CLIP score failed on {img_path.name}: {type(exc).__name__}: {exc}")
         if vlm_scorer is not None:
             vlm = vlm_scorer.score(img_path, prompt_text=prompt, context_text=prompt)
             vlm_over.append(vlm.overall)

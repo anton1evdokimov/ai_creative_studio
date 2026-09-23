@@ -39,6 +39,16 @@ diffusion:
     path: lora/xyz_hoodie
     scale: 0.8
     trigger: ""
+  # OpenPose (body) + Depth (volume). Needs SDXL base under the hood (not Turbo).
+  # Flat-lay clothes: OpenPose often empty → scale 0; Depth still holds silhouette.
+  # Heavy on 8GB — set enabled: false if OOM. pip install controlnet-aux opencv-python-headless
+  controlnet:
+    enabled: true
+    modes: [openpose, depth]
+    openpose_scale: 0.55
+    depth_scale: 0.65
+    save_maps: true
+    image: "data/input/pose_ref.jpg"          # optional extra pose/ref photo; default = product_image
 
 pipeline:
   # How many concepts to generate from LLM

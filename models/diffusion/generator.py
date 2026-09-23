@@ -8,15 +8,22 @@ from .config import load_diffusion_config
 from .factory import create_image_backend
 
 
+from models.product_kind import ensure_product_lead, looks_like_apparel, product_noun
+
+
 def concept_to_prompt(
     concept: CreativeConcept,
     product_description: str,
     product_analysis: Optional[dict] = None,
 ) -> str:
-    """Legacy naive prompt builder used ONLY when no refined_prompt is supplied
-    (i.e. old callers or fallback paths). For top-tier output use the refine_prompts node.
-    """
-    description = " ".join(product_description.split())
+    """Legacy naive prompt builder used ONLY when no refined_prompt is supplied."""
+    description = product_noun(product_analysis, product_description)
+    apparel = looks_like_apparel(product_analysis, description)
+    finish = (
+        "Photorealistic fashion photo, ultra detailed fabric, sharp stitching, magazine lookbook."
+        if apparel
+        else "Photorealistic product shot, ultra detailed, 8k, magazine quality, sharp focus."
+    )
     parts = [
         f"Professional advertising photography of {description}.",
     ]
@@ -36,7 +43,7 @@ def concept_to_prompt(
         parts.append("Color palette: " + ", ".join(str(c) for c in concept.color_palette) + ".")
     if concept.tags:
         parts.append(", ".join(str(t) for t in concept.tags) + ".")
-    parts.append("Photorealistic product shot, ultra detailed, 8k, magazine quality, sharp focus, accurate glass reflections.")
+    parts.append(finish)
     return " ".join(parts)
 
 
@@ -88,6 +95,7 @@ class FluxGenerator:
         product_description: str,
         refined_prompts: Optional[list[RefinedPrompt]] = None,
         product_analysis: Optional[dict] = None,
+        product_image: str = "",
     ) -> list[ImageGenerationResult]:
         results = []
         output_dir = Path(self.config["output_dir"])
@@ -105,6 +113,9 @@ class FluxGenerator:
                         prompt = prompt.rstrip().rstrip(",") + ", " + extras
             else:
                 prompt = concept_to_prompt(concept, product_description, product_analysis)
+
+            noun = product_noun(product_analysis, product_description, product_image)
+            prompt = ensure_product_lead(prompt, noun)
 
             slug = concept.name.lower().replace(" ", "_") or f"concept_{index}"
             slug = "".join(ch for ch in slug if ch.isalnum() or ch in "_-")[:60] or f"concept_{index}"
@@ -125,6 +136,7 @@ class FluxGenerator:
                 output_path=output_path,
                 seed=index,
                 negative_prompt=rp.negative_prompt if rp else None,
+                control_image=product_image,
             )
 
             results.append(

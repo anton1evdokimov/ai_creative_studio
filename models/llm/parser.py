@@ -14,18 +14,83 @@ def _extract_json_block(text: str) -> str:
     last = text.rfind("}")
     if first != -1 and last != -1 and last > first:
         return text[first : last + 1]
+    if first != -1:
+        return text[first:]
     first = text.find("[")
     last = text.rfind("]")
     if first != -1 and last != -1 and last > first:
         return text[first : last + 1]
+    if first != -1:
+        return text[first:]
     return text
 
 
+def _salvage_json_object(text: str) -> dict:
+    """Pull complete key/values out of truncated or slightly invalid JSON."""
+    if not text:
+        return {}
+    out: dict = {}
+    for m in re.finditer(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*"((?:\\.|[^"\\])*)"', text):
+        out[m.group(1)] = m.group(2).replace('\\"', '"')
+    for m in re.finditer(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*\[', text):
+        key = m.group(1)
+        rest = text[m.end() :]
+        chunk = rest.split("]", 1)[0]
+        items = re.findall(r'"((?:\\.|[^"\\])*)"', chunk)
+        if items:
+            out[key] = items
+    return out
+
+
+def _close_truncated_object(blob: str) -> str:
+    s = blob.strip()
+    if not s.startswith("{"):
+        return s
+    in_str = False
+    escape = False
+    stack = ["{"]
+    for ch in s[1:]:
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append("{")
+        elif ch == "[":
+            stack.append("[")
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+    if in_str:
+        s += '"'
+    while stack:
+        s += "]" if stack.pop() == "[" else "}"
+    return s
+
+
 def _safe_json_loads(text: str, fallback: Any) -> Any:
+    blob = _extract_json_block(text or "")
     try:
-        return json.loads(_extract_json_block(text))
+        return json.loads(blob)
     except Exception:
-        return fallback
+        pass
+    try:
+        return json.loads(_close_truncated_object(blob))
+    except Exception:
+        pass
+    salvaged = _salvage_json_object(blob or text or "")
+    if salvaged:
+        return salvaged
+    return fallback
 
 
 def parse_concepts(response: str) -> CreativeConcepts:

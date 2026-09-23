@@ -20,25 +20,24 @@ important visual detail a creative director would need to plan advertising image
 
 Return ONLY a valid JSON object (no markdown fences, no extra prose) with these EXACT keys:
 {{
-  "category": "e.g. premium cosmetics, beverage, apparel, electronics...",
-  "product_type": "e.g. face serum, soda can, t-shirt, wireless earbuds...",
-  "product_name": "short commercial name, guess if ambiguous",
-  "materials": ["glass", "plastic", "matte paper", "aluminium", ... up to 6 items],
-  "colors": ["human color names", ... up to 5],
-  "color_palette_hex": ["#AAAAAA", ... 3-5 dominant colours],
-  "shape": "2-3 words describing silhouette and packaging geometry",
-  "size": "relative size description: palm-sized, travel-size, counter-size...",
+  "category": "e.g. apparel, premium cosmetics, beverage, electronics",
+  "product_type": "e.g. hoodie, t-shirt, face serum",
+  "product_name": "short commercial name",
+  "materials": ["cotton fleece", "... max 4"],
+  "colors": ["pink", "... max 4"],
+  "color_palette_hex": ["#E8A0B0", "... max 3"],
+  "shape": "short silhouette",
+  "size": "relative size",
   "luxury_level": "ONE of: budget, mid-range, premium, luxury, ultra-luxury",
-  "brand_visual_cues": ["logotype style", "graphic marks", "emblems", ... visible on packaging],
-  "key_visual_features": ["dropper applicator", "gold foil cap", "rounded shoulder glass", ...],
-  "packaging_type": "e.g. glass dropper bottle, blister pack, folding carton, tin can",
-  "extracted_text_ocr": "any text you can confidently read on the item (or empty string)",
-  "visual_caption": "2-3 sentence detailed commercial description of the photo",
-  "suggested_target_audience": "1-2 sentences: who buys this product (demographics + psychographics)"
+  "brand_visual_cues": ["... max 4"],
+  "key_visual_features": ["hood", "kangaroo pocket", "... max 5"],
+  "packaging_type": "garment / hangtag / bottle / box",
+  "extracted_text_ocr": "",
+  "visual_caption": "ONE short sentence",
+  "suggested_target_audience": "short phrase"
 }}
 
-Think carefully before answering. Be precise and conservative — if something is not legible,
-return an empty string/array for that key.
+Keep arrays short. JSON MUST be fully closed. If clothing: category=apparel, fabrics not glass.
 """
 
 
@@ -80,7 +79,13 @@ class ProductAnalyzer:
                 f"   ⚠️ Image missing ({image_path!r}) — text-only fallback, "
                 "VLM did not see a photo"
             )
-            return self._text_only_fallback(user_description or "retail consumer product")
+            hint = ""
+            try:
+                from models.product_kind import filename_hint
+                hint = filename_hint(p) if p else ""
+            except Exception:
+                hint = ""
+            return self._text_only_fallback(user_description or hint or "retail consumer product")
 
         # Case 2: real image -> ask VLM ---------------------------------------------------
         raw = self.vlm.chat_with_image(
@@ -91,7 +96,7 @@ class ProductAnalyzer:
                 "valid JSON object matching the requested schema. Do not wrap in markdown fences, "
                 "do not write commentary before or after JSON."
             ),
-            max_tokens=900,
+            max_tokens=1200,
             temperature=0.2,
         )
         parsed: dict[str, Any] = _safe_json_loads(raw, {})
@@ -103,18 +108,34 @@ class ProductAnalyzer:
             snippet = (raw or "").replace("\n", " ")[:280]
             print(f"   ⚠️ VLM JSON empty/unparsed. Raw: {snippet or '∅'}")
 
-        # Merge any user-provided hints (they might know the brand/sku)
-        if user_description and not analysis.product_name:
-            analysis.product_name = user_description[:120]
+        analysis = self._enrich_from_hints(analysis, p, user_description)
         return analysis
 
     # ------------------------------------------------------------------
     @staticmethod
     def _text_only_fallback(description: str) -> ProductAnalysis:
         """Used when no product image was supplied — infer from user text."""
+        from models.product_kind import looks_like_apparel
+
         desc_lc = description.lower()
         is_cosmetic = any(t in desc_lc for t in ["serum", "cream", "skincare", "lotion", "cosmetic", "beauty"])
         is_premium = any(t in desc_lc for t in ["premium", "luxury", "luxe", "haute", "designer"])
+        if looks_like_apparel(description=description):
+            return ProductAnalysis(
+                category="apparel",
+                product_type=description[:80] or "garment",
+                product_name=description[:120],
+                materials=["cotton fleece", "rib knit cuffs", "metal zipper hardware"],
+                colors=["heather grey", "black"],
+                color_palette_hex=["#8A8A8A", "#111111", "#F4F4F4"],
+                shape="pullover garment silhouette, hood and torso",
+                size="adult regular fit",
+                luxury_level="premium" if is_premium else "mid-range",
+                key_visual_features=["hood", "kangaroo pocket", "rib cuffs", "visible fabric texture"],
+                packaging_type="folded garment / hangtag",
+                visual_caption=f"Studio fashion photo of {description[:160]}.",
+                suggested_target_audience="18-35 streetwear and casual apparel shoppers.",
+            )
         if is_cosmetic:
             return ProductAnalysis(
                 category="premium cosmetics" if is_premium else "beauty & personal care",
@@ -179,4 +200,21 @@ class ProductAnalyzer:
                 ("VLM raw output:\n" + _str(raw, 4000) if raw else "")
             ),
         )
+
+    @staticmethod
+    def _enrich_from_hints(analysis: ProductAnalysis, image_path: Path | None, user_description: str) -> ProductAnalysis:
+        from models.product_kind import filename_hint, looks_like_apparel, product_noun
+
+        hint = filename_hint(image_path or "")
+        apparel = looks_like_apparel(analysis, description=user_description, image_path=image_path or "")
+        if apparel and (not analysis.category or "cosmetic" in analysis.category.lower()):
+            analysis.category = "apparel"
+        if not analysis.product_type and hint:
+            analysis.product_type = hint
+        if not analysis.product_name:
+            analysis.product_name = (user_description[:120] if user_description else "") or hint or analysis.product_type
+        if not analysis.visual_caption and (analysis.product_type or hint):
+            noun = product_noun(analysis, user_description, image_path or "")
+            analysis.visual_caption = f"Commercial photo of {noun}."
+        return analysis
 

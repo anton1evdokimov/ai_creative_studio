@@ -57,11 +57,34 @@ def load_diffusion_config() -> dict:
             "scale": 0.8,
             "trigger": "",
         },
+        "controlnet": {
+            "enabled": False,
+            "modes": ["openpose", "depth"],
+            "openpose_scale": 0.55,
+            "depth_scale": 0.65,
+            "openpose_model": "thibaud/controlnet-openpose-sdxl-1.0",
+            "depth_model": "diffusers/controlnet-depth-sdxl-1.0",
+            "save_maps": True,
+            "image": "",
+        },
     }
 
     merged = {**defaults, **config}
     lora_cfg = defaults["lora"] | (config.get("lora") or {} if isinstance(config.get("lora"), dict) else {})
     merged["lora"] = lora_cfg
+    cn_defaults = defaults["controlnet"]
+    cn_src = config.get("controlnet") if isinstance(config.get("controlnet"), dict) else {}
+    merged["controlnet"] = {**cn_defaults, **cn_src}
+    modes = merged["controlnet"].get("modes") or cn_defaults["modes"]
+    if isinstance(modes, str):
+        modes = [m.strip() for m in modes.split(",") if m.strip()]
+    merged["controlnet"]["modes"] = modes
+    cn_image = str(merged["controlnet"].get("image") or "").strip()
+    if cn_image:
+        ip = Path(cn_image)
+        if not ip.is_absolute():
+            ip = Path(__file__).resolve().parents[2] / ip
+        merged["controlnet"]["image"] = str(ip)
     # Make output_dir absolute if relative
     out = Path(merged["output_dir"])
     if not out.is_absolute():

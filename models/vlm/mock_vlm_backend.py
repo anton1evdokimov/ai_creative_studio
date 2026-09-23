@@ -45,6 +45,23 @@ _PRESET_PRODUCT_ANALYSIS = {
         ),
         "suggested_target_audience": "women 25-45, high disposable income, luxury skincare buyers",
     },
+    "hoodie": {
+        "category": "apparel",
+        "product_type": "hoodie",
+        "product_name": "pullover hoodie",
+        "materials": ["cotton fleece", "rib knit cuffs", "drawcord"],
+        "colors": ["heather grey", "black"],
+        "color_palette_hex": ["#8A8A8A", "#111111", "#F4F4F4"],
+        "shape": "oversized pullover, hood, kangaroo pocket",
+        "size": "adult regular fit",
+        "luxury_level": "mid-range",
+        "brand_visual_cues": ["clean chest, no loud logo in crop"],
+        "key_visual_features": ["hood", "kangaroo pocket", "rib cuffs", "visible fleece texture"],
+        "packaging_type": "folded garment",
+        "extracted_text_ocr": "",
+        "visual_caption": "Studio photo of a heather grey pullover hoodie with hood and front pocket.",
+        "suggested_target_audience": "18-35 streetwear shoppers",
+    },
     "default": {
         "category": "consumer goods",
         "product_type": "packaged product",
@@ -72,6 +89,8 @@ class MockVLMBackend:
 
     def _pick_profile(self, image_path: str, prompt: str) -> dict:
         sig = f"{Path(image_path).name.lower()}::{prompt.lower()}"
+        if "hoodie" in sig or "sweatshirt" in sig or "apparel" in sig or "tshirt" in sig or "t-shirt" in sig:
+            return dict(_PRESET_PRODUCT_ANALYSIS["hoodie"])
         if "serum" in sig or "cosmetic" in sig or "bottle" in sig:
             return dict(_PRESET_PRODUCT_ANALYSIS["serum"])
         return dict(_PRESET_PRODUCT_ANALYSIS["default"])

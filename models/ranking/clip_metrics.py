@@ -111,11 +111,30 @@ class CLIPMetrics:
         print("   Aesthetic predictor ready")
         return mlp
 
+    def _to_embed(self, feat, *, image: bool) -> torch.Tensor:
+        if torch.is_tensor(feat):
+            return feat
+        for attr in ("image_embeds", "text_embeds"):
+            val = getattr(feat, attr, None)
+            if val is not None and torch.is_tensor(val):
+                return val
+        pooled = getattr(feat, "pooler_output", None)
+        if pooled is not None and torch.is_tensor(pooled):
+            proj = self.model.visual_projection if image else self.model.text_projection
+            return proj(pooled.to(dtype=proj.weight.dtype))
+        if isinstance(feat, (tuple, list)) and feat and torch.is_tensor(feat[0]):
+            return feat[0]
+        raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
+
     @torch.inference_mode()
     def _image_embed(self, image: Image.Image) -> torch.Tensor:
         inputs = self.processor(images=image, return_tensors="pt")
         pixel = inputs["pixel_values"].to(self.device, dtype=self.dtype)
-        feat = self.model.get_image_features(pixel_values=pixel)
+        try:
+            feat = self.model.get_image_features(pixel_values=pixel)
+        except TypeError:
+            feat = self.model.get_image_features(**inputs.to(self.device))
+        feat = self._to_embed(feat, image=True)
         return F.normalize(feat.float(), dim=-1)
 
     @torch.inference_mode()
@@ -136,6 +155,7 @@ class CLIPMetrics:
             feat = self.model.get_text_features(**kwargs)
         except TypeError:
             feat = self.model.get_text_features(input_ids=ids)
+        feat = self._to_embed(feat, image=False)
         return F.normalize(feat.float(), dim=-1)
 
     def score(

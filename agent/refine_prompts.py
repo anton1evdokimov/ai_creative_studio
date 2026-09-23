@@ -42,20 +42,19 @@ advertisement, produce a polished, highly specific prompt set.
 ## What to output: a single JSON object
 ```
 {{
-  "positive_prompt": "A single long string, comma separated, ENGLISH only. You MUST include:
-    - EXACT product & its exact visual features (materials, colours, silhouette, cap details, etc) from concept + context
-    - camera: e.g. 'Hasselblad X1D II, 80mm f/2.2 lens, leaf shutter, Phase One IQ4 150MP digital back'
-    - lighting: TLCI 98+, CRI 95+, 5200K, modifier (large octabox 45deg top-left, white bounce card fill from front-right), hard or soft, light ratio
-    - composition: rule-of-thirds, negative space right for copy, product 30% frame, eye-level
-    - depth-of-field: f/2.8 focus on the bottle label/cap, softly blurred background
-    - background: specific description matching the concept, e.g. raw travertine slab, sun shadow bars
-    - style: 'commercial advertising photography, ultra high end retouch, high dynamic range, ultra sharp focus on subject, glossy specular highlights rendered correctly'
-    - mood, season, time-of-day if concept specifies them.
+  "positive_prompt": "A single long string, comma separated, ENGLISH only. START with the exact product
+    (hoodie / t-shirt / serum bottle / etc) from context — never leave the subject unnamed.
+    You MUST include:
+    - EXACT product and its visual features from concept + context (if apparel: fabric, colorway, hood/pockets/print/fit;
+      if cosmetics: materials, cap, liquid, silhouette)
+    - camera: e.g. 'Hasselblad X1D II, 80mm f/2.2 lens'
+    - lighting: TLCI 98+, modifier, direction
+    - composition matching the concept
+    - background matching the concept (apparel: cyclorama / street wall / hanger — NOT a bottle pedestal unless it is cosmetics)
+    - style: commercial advertising or fashion lookbook photography, ultra sharp on the product
     NO numbered lists, NO newlines inside the string.",
-  "negative_prompt": "A single string, comma separated, ENGLISH only, fine-tuned for FLUX.1 4-step. Include:
-    deformed, malformed, melted glass, broken bottle, extra dropper tubes, 6-finger hand, extra limbs, bad perspective, warped typography, flipped logos, extra reflections,
-    deformed text, aliased edges, banding, posterisation, watermarks, captions, jpeg artifacts, over-sharpen halos, floating objects, bad shadows, wrong perspective glass,
-    uncanny valley, digital painting, CG render, cartoon, anime, illustration, sketch, lowres, blurry",
+  "negative_prompt": "A single string, comma separated, ENGLISH only. If apparel: extra hoods, extra sleeves, melted fabric, deformed collar, extra limbs.
+    If bottled cosmetics: melted glass, broken bottle, extra dropper. Also: watermarks, captions, jpeg artifacts, cartoon, blurry.",
   "style_boost_tags": ["list", "of", "2-6", "extra", "tags"],
   "estimated_prompt_strength_notes": "1 short sentence explaining how likely this prompt is to produce on-model luxury results for FLUX.1 schnell 4-step"
 }}
@@ -118,11 +117,9 @@ class PromptRefiner:
         if not positive or self._looks_like_instruction(positive):
             positive = self._fallback_positive(concept, product_analysis)
         if not negative or self._looks_like_instruction(negative):
-            negative = (
-                "deformed, malformed, melted glass, broken bottle, extra dropper, warped type, "
-                "jpeg artifacts, watermarks, floating objects, bad shadows, wrong perspective glass, "
-                "CG render, cartoon, illustration, lowres, blurry"
-            )
+            from models.product_kind import category_negative, looks_like_apparel
+
+            negative = category_negative(looks_like_apparel(product_analysis))
         took = time.time() - t0
 
         return RefinedPrompt(
@@ -186,8 +183,9 @@ class PromptRefiner:
     @staticmethod
     def _fallback_positive(concept: CreativeConcept, product_analysis) -> str:
         from models.diffusion.generator import concept_to_prompt
+        from models.product_kind import ensure_product_lead, looks_like_apparel, product_noun
 
-        desc = ""
+        desc = product_noun(product_analysis)
         analysis_dict = None
         if product_analysis is not None:
             try:
@@ -195,17 +193,17 @@ class PromptRefiner:
             except Exception:
                 analysis_dict = product_analysis if isinstance(product_analysis, dict) else None
             if isinstance(analysis_dict, dict):
-                desc = str(
-                    analysis_dict.get("visual_caption")
-                    or analysis_dict.get("product_name")
-                    or analysis_dict.get("product_type")
-                    or ""
-                )
+                desc = product_noun(analysis_dict)
         base = concept_to_prompt(concept, desc, analysis_dict)
+        base = ensure_product_lead(base, desc)
+        apparel = looks_like_apparel(product_analysis, desc)
+        extra = (
+            "fashion lookbook photography, sharp fabric texture, visible stitching, natural drape"
+            if apparel
+            else "correct glass reflections, glossy specular highlights"
+        )
         return (
-            f"{base}, Hasselblad X1D II, 80mm f/2.2 lens, Phase One IQ4 150MP digital back, "
-            "TLCI 98+, CRI 95+, 5200K natural daylight, large octabox 45deg top-left, "
-            "white bounce card fill from front-right, commercial advertising photography, "
-            "ultra high end retouch, ultra sharp focus on product, correct glass reflections, "
-            "glossy specular highlights, high dynamic range, print ready"
+            f"{base}, Hasselblad X1D II, 80mm f/2.2 lens, "
+            "TLCI 98+, CRI 95+, 5200K, large octabox 45deg top-left, "
+            f"commercial advertising photography, ultra sharp focus on product, {extra}"
         )

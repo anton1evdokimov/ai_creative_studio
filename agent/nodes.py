@@ -108,16 +108,11 @@ def analyze_product(state):
     analysis_dict.setdefault("target_audience", analysis_obj.suggested_target_audience or "")
     analysis_dict["product_image"] = img
 
-    inferred = " ".join(
-        part for part in (
-            analysis_obj.product_name,
-            analysis_obj.product_type,
-            analysis_obj.visual_caption,
-        ) if part
-    ).strip()
     if not desc:
-        desc = inferred or "retail product"
-        print(f"   📝 No user description — using VLM read: {desc[:140]}{'…' if len(desc) > 140 else ''}")
+        from models.product_kind import product_noun
+
+        desc = product_noun(analysis_obj, "", img)
+        print(f"   📝 No user description — using VLM/filename read: {desc[:140]}{'…' if len(desc) > 140 else ''}")
     state["product_description"] = desc
 
     print(f"   🏷️  Category: {analysis_obj.category or '—'}  |  Type: {analysis_obj.product_type or '—'}")
@@ -151,7 +146,7 @@ def create_concepts(state):
     if isinstance(pa, dict):
         lux = str(pa.get("luxury_level") or pa.get("style") or "")
 
-    prompt = f"""You are a senior creative director for luxury brands.
+    prompt = f"""You are a senior creative director for luxury and fashion brands.
 
 PRODUCT:
 Description: {product_desc}
@@ -159,7 +154,10 @@ Luxury / vibe: {lux}
 Analysis: {product_info}
 
 TASK: Generate exactly {num_concepts} diverse advertising creative concepts.
-Each concept must be visually distinct (different scene, mood, camera angle, lighting direction, background material).
+Each concept must be visually distinct (different scene, mood, camera angle, lighting, background).
+The HERO is this exact product — keep its category. If it is apparel/clothing, show the GARMENT
+(ghost mannequin, hanger, folded, or worn lookbook). Do NOT invent a bottle, dropper, serum, or pedestal shot
+unless the product actually is cosmetics/packaged goods.
 
 RESPOND ONLY AS VALID JSON — no markdown, no extra words:
 {{"concepts": [
@@ -184,31 +182,12 @@ RESPOND ONLY AS VALID JSON — no markdown, no extra words:
     concepts = parsed.concepts
     if not concepts:
         print("   ⚠️ No concepts parsed, using fallback concepts")
-        from schemas.creative import CreativeConcept
-        concepts = [
-            CreativeConcept(
-                name="Minimalist Studio",
-                scene="white seamless studio backdrop, single pale travertine pedestal",
-                lighting="soft diffused studio key light 45deg top-left + subtle cool rim light behind",
-                style="high-end commercial product photography, Peter Lippmann style",
-                mood="clean, serene, premium, calm",
-                camera_angle="eye-level straight on, medium close-up",
-                color_palette=["#FFFFFF", "#F5F5F5", "#E8E0D4", "#C9A227"],
-                composition="centered symmetry, generous negative space all around",
-                tags=["studio shot", "clean", "minimal", "pedestal", "magazine", "editorial"],
-            ),
-            CreativeConcept(
-                name="Golden Botanical Hour",
-                scene="product on natural travertine slab, soft green eucalyptus leaves bokeh around edges, thin shadow bars from window blinds",
-                lighting="golden hour warm sunlight 35deg backlight dappled leaf shadows, white foamcore fill",
-                style="organic lifestyle editorial, natural light photography",
-                mood="warm, fresh, natural, aspirational, calm",
-                camera_angle="45-degree flat lay overhead, medium shot",
-                color_palette=["#D4A574", "#8B9A6B", "#F7E7CE", "#E6B325"],
-                composition="rule of thirds, product upper-left, negative space bottom-right for headline",
-                tags=["lifestyle", "natural", "golden hour", "botanical", "outdoor", "editorial"],
-            ),
-        ]
+        from models.product_kind import fallback_concepts, looks_like_apparel
+
+        img = state.get("product_image", "") or ""
+        concepts = fallback_concepts(
+            looks_like_apparel(state.get("product_analysis_obj") or pa, product_desc, img)
+        )
 
     print(f"   ✅ Got {len(concepts)} concepts")
     for i, c in enumerate(concepts):
@@ -302,12 +281,16 @@ def generate_images(state):
     pa = state.get("product_analysis") or {}
     product_desc = state.get("product_description", "") or ""
     if not product_desc and isinstance(pa, dict):
-        product_desc = str(pa.get("visual_caption") or pa.get("product") or "")
+        from models.product_kind import product_noun
+
+        product_desc = product_noun(pa, "", state.get("product_image") or "")
 
     results = generator.generate_concepts(
         concepts,
         product_description=product_desc,
         refined_prompts=refined,
+        product_analysis=pa if isinstance(pa, dict) else None,
+        product_image=state.get("product_image") or "",
     )
 
     state["generated_images"] = [item.image_path for item in results]
@@ -506,10 +489,22 @@ def improve_prompt(state):
     if "refined_prompts" in state:
         del state["refined_prompts"]
     enhanced = []
+    from models.product_kind import looks_like_apparel
+
+    apparel = looks_like_apparel(
+        state.get("product_analysis_obj") or state.get("product_analysis"),
+        state.get("product_description", ""),
+        state.get("product_image", ""),
+    )
+    extra_style = (
+        ", photorealistic, ultra detailed, 8k, sharp focus, accurate fabric texture and stitching"
+        if apparel
+        else ", photorealistic, ultra detailed, 8k, sharp focus, accurate glass refraction"
+    )
     for concept in state.get("ranked_concepts") or state.get("creative_concepts", []):
         updates = {
-            "style": (concept.style + ", photorealistic, ultra detailed, 8k, sharp focus, accurate glass refraction").strip(","),
-            "lighting": (concept.lighting + ", high CRI TLCI 98+, soft shadows, cinematic, correct product reflections").strip(","),
+            "style": (concept.style + extra_style).strip(","),
+            "lighting": (concept.lighting + ", high CRI TLCI 98+, soft shadows, cinematic").strip(","),
             "tags": list(dict.fromkeys((concept.tags or []) + ["photorealistic", "high detail", "professional", "print ready"])),
         }
         enhanced.append(concept.model_copy(update=updates))
