@@ -111,6 +111,17 @@ class CLIPMetrics:
         print("   Aesthetic predictor ready")
         return mlp
 
+    def _project_if_needed(self, pooled: torch.Tensor, *, image: bool) -> torch.Tensor:
+        proj_name = "visual_projection" if image else "text_projection"
+        proj = getattr(self.model, proj_name, None)
+        if proj is None:
+            return pooled
+        in_dim = int(proj.weight.shape[1])
+        dim = int(pooled.shape[-1])
+        if dim == in_dim:
+            return proj(pooled.to(device=proj.weight.device, dtype=proj.weight.dtype))
+        return pooled
+
     def _to_embed(self, feat, *, image: bool) -> torch.Tensor:
         if torch.is_tensor(feat):
             t = feat
@@ -132,16 +143,12 @@ class CLIPMetrics:
                 if pooled is None and hs is not None:
                     pooled = hs[:, 0]
                 if pooled is not None and torch.is_tensor(pooled):
-                    proj_name = "visual_projection" if image else "text_projection"
-                    proj = getattr(self.model, proj_name, None)
-                    if proj is not None:
-                        t = proj(pooled.to(device=proj.weight.device, dtype=proj.weight.dtype))
-                    else:
-                        t = pooled
+                    t = self._project_if_needed(pooled, image=image)
             if t is None and isinstance(feat, (tuple, list)) and feat and torch.is_tensor(feat[0]):
                 t = feat[0]
         if t is None:
             raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
+        t = self._project_if_needed(t, image=image)
         if t.dim() == 1:
             t = t.unsqueeze(0)
         return t
