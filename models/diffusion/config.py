@@ -117,6 +117,7 @@ def load_vlm_config() -> dict:
     config = data.get("vlm") or {}
     defaults = {
         "mlx_vlm_model": "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+        "cuda_model": "Qwen/Qwen2-VL-2B-Instruct",
         "max_tokens": 900,
     }
     return {**defaults, **config}

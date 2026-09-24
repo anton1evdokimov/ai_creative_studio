@@ -20,6 +20,7 @@ vlm:
   # Vision model used for: input product analysis, generated-image scoring, captioning.
   # On 8GB M1 you MUST use 4-bit quant. Qwen2-VL-2B works; 7B will OOM.
   mlx_vlm_model: mlx-community/Qwen2-VL-2B-Instruct-4bit
+  cuda_model: Qwen/Qwen2-VL-2B-Instruct
   max_tokens: 900
 
 diffusion:
