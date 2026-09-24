@@ -211,7 +211,7 @@ def score_prompts(state):
     scored = []
 
     for idx, concept in enumerate(concepts):
-        concept_json = concept.model_dump_json(ensure_ascii=False)
+        concept_json = json.dumps(concept.model_dump(), ensure_ascii=False)
         prompt = f"""You are a prompt quality rater for FLUX.1 image diffusion.
 
 PRODUCT CONTEXT: {product_info}
