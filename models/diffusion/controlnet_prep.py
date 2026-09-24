@@ -14,15 +14,15 @@ def _resize(image: Image.Image, width: int, height: int) -> Image.Image:
     return image.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
 
 
-def _mean_luma(image: Image.Image) -> float:
-    gray = image.convert("L")
-    hist = gray.histogram()
-    total = sum(hist) or 1
-    return sum(i * c for i, c in enumerate(hist)) / total
-
-
 def pose_is_empty(image: Image.Image) -> bool:
-    return _mean_luma(image) < 6.0
+    """True only if there is no skeleton (near-black canvas).
+
+    Stick figures have mean luma ~3–5 on 512² — do not use mean brightness.
+    """
+    hist = image.convert("L").histogram()
+    total = sum(hist) or 1
+    lit = sum(hist[16:])
+    return lit / total < 0.001
 
 
 def load_rgb(path: str | Path) -> Image.Image:

@@ -237,7 +237,8 @@ class SDXLBackend(ImageBackend):
         self._maps_cache[key] = maps
         return maps
 
-    def _cn_images_and_scales(self, maps: dict) -> tuple[list, list[float]] | tuple[None, None]:
+    def _cn_images_and_scales(self, maps: dict, extra: dict | None = None) -> tuple:
+        extra = extra or {}
         cfg = self._cn_cfg()
         images = []
         scales = []
@@ -255,11 +256,18 @@ class SDXLBackend(ImageBackend):
                 continue
             images.append(img)
             if name == "openpose":
-                scale = float(cfg.get("openpose_scale") or 0.55)
-                if maps.get("_pose_empty"):
-                    scale = 0.0
+                if extra.get("openpose_scale") is not None:
+                    scale = float(extra["openpose_scale"])
+                else:
+                    scale = float(cfg.get("openpose_scale") or 0.55)
+                    if maps.get("_pose_empty"):
+                        scale = 0.0
             else:
-                scale = float(cfg.get("depth_scale") or 0.65)
+                scale = (
+                    float(extra["depth_scale"])
+                    if extra.get("depth_scale") is not None
+                    else float(cfg.get("depth_scale") or 0.65)
+                )
             scales.append(scale)
         if not images:
             return None, None
@@ -316,7 +324,7 @@ class SDXLBackend(ImageBackend):
             images, scales = None, None
             if source and Path(source).is_file():
                 maps = self._maps_for(source, int(self.config["width"]), int(self.config["height"]))
-                images, scales = self._cn_images_and_scales(maps)
+                images, scales = self._cn_images_and_scales(maps, extra)
             if images is None:
                 from PIL import Image as PILImage
 

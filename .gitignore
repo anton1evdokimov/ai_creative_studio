@@ -42,4 +42,3 @@ results/
 lora/
 *.safetensors
 *.png
-*.jpg
