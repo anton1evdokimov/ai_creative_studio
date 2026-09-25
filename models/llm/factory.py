@@ -47,7 +47,11 @@ def create_llm():
         print("🧠 Using CUDA LLM backend (NVIDIA)")
         from .cuda_backend import CUDABackend
 
-        _llm_instance = CUDABackend(config["cuda_model"])
+        _llm_instance = CUDABackend(
+            config["cuda_model"],
+            max_tokens=config["max_tokens"],
+            temperature=config["temperature"],
+        )
         return _llm_instance
 
     raise RuntimeError(

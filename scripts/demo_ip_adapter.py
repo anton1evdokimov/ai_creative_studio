@@ -15,16 +15,23 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-PROMPTS = [
-    "pink oversized hoodie on a model, minimal white studio, softbox lighting, fashion lookbook, photorealistic",
-    "pink oversized hoodie, golden hour street, cinematic, shallow depth of field, photorealistic",
-    "pink oversized hoodie on a hanger, boutique interior, warm tungsten, product catalog, photorealistic",
+SCENES = [
+    "minimal white studio, softbox lighting, product catalog, photorealistic",
+    "golden hour tabletop, cinematic, shallow depth of field, photorealistic",
+    "kitchen still life, warm tungsten, magazine advertisement, photorealistic",
 ]
+
+
+def _subject(image: Path, explicit: str) -> str:
+    if explicit.strip():
+        return explicit.strip()
+    return image.stem.replace("_", " ").replace("-", " ").strip() or "product"
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--image", default="data/input/hoodie.webp")
+    p.add_argument("--subject", default="", help="Noun in the prompt. Default: image filename")
     p.add_argument("--out_dir", default="generated/ip_adapter_demo")
     p.add_argument("--scale", type=float, default=0.6, help="ip_adapter_scale")
     p.add_argument("--seed", type=int, default=42)
@@ -33,6 +40,9 @@ def main() -> int:
     ref = Path(args.image)
     if not ref.is_file():
         raise SystemExit(f"Missing reference: {ref}")
+
+    subject = _subject(ref, args.subject)
+    prompts = [f"{subject}, {scene}" for scene in SCENES]
 
     from models.diffusion.config import load_diffusion_config
     from models.diffusion.sdxl_backend import SDXLBackend
@@ -53,9 +63,9 @@ def main() -> int:
     cfg["output_dir"] = str(out.resolve())
 
     backend = SDXLBackend(cfg)
-    for i, prompt in enumerate(PROMPTS):
+    for i, prompt in enumerate(prompts):
         path = str(out / f"{i:02d}_scene.png")
-        print(f"\n[{i+1}/{len(PROMPTS)}] {prompt[:80]}")
+        print(f"\n[{i+1}/{len(prompts)}] {prompt[:80]}")
         backend.generate(
             prompt,
             path,
