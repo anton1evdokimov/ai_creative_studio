@@ -9,6 +9,48 @@ from PIL import Image
 from .base import ImageBackend
 
 
+def _to_pil(out) -> Image.Image:
+    if isinstance(out, (list, tuple)):
+        out = out[0]
+    blob = out
+    if not isinstance(out, Image.Image):
+        blob = (
+            getattr(out, "image", None)
+            or getattr(out, "images", None)
+            or getattr(out, "frames", None)
+            or out
+        )
+    while isinstance(blob, (list, tuple)) and blob:
+        blob = blob[0]
+    if isinstance(blob, Image.Image):
+        return blob.convert("RGB")
+    if torch.is_tensor(blob):
+        t = blob.detach().cpu()
+        if t.ndim == 4:
+            t = t[0]
+        if t.ndim == 3 and t.shape[0] in {1, 3, 4}:
+            t = t.permute(1, 2, 0)
+        arr = t.numpy()
+        if arr.dtype != "uint8":
+            arr = (arr.clip(0, 1) * 255).astype("uint8") if arr.max() <= 1.0 else arr.clip(0, 255).astype("uint8")
+        if arr.ndim == 2:
+            return Image.fromarray(arr, mode="L").convert("RGB")
+        return Image.fromarray(arr[..., :3])
+    try:
+        import numpy as np
+
+        arr = np.array(blob)
+        if arr.ndim == 4:
+            arr = arr[0]
+        if arr.ndim == 3 and arr.shape[0] in {1, 3, 4}:
+            arr = np.transpose(arr, (1, 2, 0))
+        if arr.dtype != "uint8":
+            arr = (arr.clip(0, 1) * 255).astype("uint8") if arr.max() <= 1.0 else arr.clip(0, 255).astype("uint8")
+        return Image.fromarray(arr[..., :3] if arr.ndim == 3 else arr).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError(f"Kandinsky 5 output type {type(out).__name__}: {exc}") from exc
+
+
 K5_I2I_DEFAULT = "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers"
 K5_SIZES = (
     (1024, 1024),
@@ -96,16 +138,7 @@ class Kandinsky5Backend(ImageBackend):
         print(f"   Kandinsky5 I2I  {Path(ref).name}  {w}x{h}  steps={kwargs['num_inference_steps']}")
 
         out = self.pipe(**kwargs)
-        pil = None
-        if getattr(out, "images", None):
-            pil = out.images[0]
-        elif getattr(out, "frames", None):
-            frames = out.frames[0]
-            pil = frames[0] if isinstance(frames, (list, tuple)) else frames
-        if pil is None:
-            raise RuntimeError("Kandinsky 5 returned no image")
-        if not isinstance(pil, Image.Image):
-            pil = Image.fromarray(pil)
+        pil = _to_pil(out)
         pil.save(output_path)
         torch.cuda.empty_cache()
         return output_path
