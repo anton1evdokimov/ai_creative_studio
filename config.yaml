@@ -40,25 +40,28 @@ diffusion:
     path: lora/xyz_hoodie
     scale: 0.8
     trigger: ""
-  # OpenPose (body) + Depth (volume). Needs SDXL base under the hood (not Turbo).
-  # Flat-lay clothes: OpenPose often empty → scale 0; Depth still holds silhouette.
-  # Heavy on 8GB — set enabled: false if OOM. pip install controlnet-aux opencv-python-headless
+  # Canny = product silhouette (geometry). OpenPose+Depth = clothing pose (set modes back).
+  # Canny reads the product photo, not pose_ref.
   controlnet:
-    enabled: false
-    modes: [openpose, depth]
+    enabled: true
+    modes: [canny]
+    canny_scale: 0.55
+    canny_low: 80
+    canny_high: 200
     openpose_scale: 0.0
     depth_scale: 0.0
     save_maps: true
-    image: "data/input/pose_ref.jpg"          # optional extra pose/ref photo; default = product_image
-  # One product photo → identity. Prompt still owns scene/light/style.
-  # Plus weights: h94/IP-Adapter ip-adapter-plus_sdxl_vit-h. Start scale 0.5–0.7.
+    image: ""
+    canny_image: ""
+    canny_align: left                         # left | center | right — bottle on landscape
   ip_adapter:
     enabled: true
-    scale: 0.6
-    image: ""                                 # empty = product photo from generate()
+    scale: 0.5
+    image: ""
     pad_square: true
     match_aspect: true
-    max_aspect: 1.333                         # cap 4:3; skinny refs would otherwise zoom-crop
+    max_aspect: 1.333
+    canvas: landscape                         # product | landscape | square
 
 pipeline:
   # How many concepts to generate from LLM

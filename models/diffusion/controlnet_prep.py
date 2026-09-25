@@ -83,26 +83,82 @@ def build_depth_map(image: Image.Image) -> Image.Image | None:
     return depth.convert("RGB")
 
 
+def fit_contain(
+    image: Image.Image,
+    width: int,
+    height: int,
+    fill=(0, 0, 0),
+    align: str = "center",
+) -> Image.Image:
+    """Place a tall product on a wider canvas without stretching (letterbox)."""
+    image = image.convert("RGB")
+    w, h = image.size
+    scale = min(width / max(w, 1), height / max(h, 1))
+    nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    resized = image.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), fill)
+    margin = int(width * 0.08)
+    side = (align or "center").lower()
+    if side == "left":
+        x = margin
+    elif side == "right":
+        x = max(margin, width - nw - margin)
+    else:
+        x = (width - nw) // 2
+    y = (height - nh) // 2
+    canvas.paste(resized, (x, y))
+    return canvas
+
+
+def build_canny_map(
+    image: Image.Image,
+    low: int = 80,
+    high: int = 200,
+) -> Image.Image | None:
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        print("⚠️  opencv not installed — skip Canny. pip install opencv-python-headless")
+        return None
+    print("   ControlNet: running Canny…")
+    arr = np.array(image.convert("RGB"))
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, int(low), int(high))
+    rgb = np.stack([edges, edges, edges], axis=-1)
+    return Image.fromarray(rgb)
+
+
 def build_control_maps(
     source_path: str | Path,
     width: int,
     height: int,
     modes: list[str],
     save_dir: Path | None = None,
+    canny_path: str | Path | None = None,
+    canny_low: int = 80,
+    canny_high: int = 200,
+    canny_align: str = "center",
 ) -> dict[str, Image.Image]:
-    src = load_rgb(source_path)
-    src = _resize(src, width, height)
+    src = load_rgb(source_path) if source_path and Path(source_path).is_file() else None
     maps: dict[str, Image.Image] = {}
     wanted = {str(m).lower() for m in modes}
 
-    if "openpose" in wanted or "pose" in wanted:
-        pose = build_openpose_map(src)
+    if src is not None and ("openpose" in wanted or "pose" in wanted):
+        pose = build_openpose_map(_resize(src, width, height))
         if pose is not None:
             maps["openpose"] = _resize(pose, width, height)
-    if "depth" in wanted:
-        depth = build_depth_map(src)
+    if src is not None and "depth" in wanted:
+        depth = build_depth_map(_resize(src, width, height))
         if depth is not None:
             maps["depth"] = _resize(depth, width, height)
+    if "canny" in wanted:
+        cpath = canny_path or source_path
+        if cpath and Path(cpath).is_file():
+            fitted = fit_contain(load_rgb(cpath), width, height, align=canny_align)
+            canny = build_canny_map(fitted, low=canny_low, high=canny_high)
+            if canny is not None:
+                maps["canny"] = canny
 
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)

@@ -142,6 +142,11 @@ class SDXLBackend(ImageBackend):
             print(f"Loading ControlNet Depth ({mid})")
             nets.append(ControlNetModel.from_pretrained(mid, torch_dtype=dtype))
             order.append("depth")
+        if "canny" in modes:
+            mid = cfg.get("canny_model") or "diffusers/controlnet-canny-sdxl-1.0"
+            print(f"Loading ControlNet Canny ({mid})")
+            nets.append(ControlNetModel.from_pretrained(mid, torch_dtype=dtype))
+            order.append("canny")
         if not nets:
             return None
 
@@ -249,6 +254,17 @@ class SDXLBackend(ImageBackend):
             return extra_img
         return cfg_img or extra_img
 
+    def _canny_source(self, extra: dict) -> str:
+        cfg = self._cn_cfg()
+        for raw in (
+            str(cfg.get("canny_image") or "").strip(),
+            str(extra.get("ip_adapter_image") or "").strip(),
+            str(extra.get("control_image") or "").strip(),
+        ):
+            if raw and Path(raw).is_file():
+                return raw
+        return ""
+
     def _control_source(self, extra: dict) -> str:
         cfg_img = str(self._cn_cfg().get("image") or "").strip()
         if cfg_img and Path(cfg_img).is_file():
@@ -258,8 +274,10 @@ class SDXLBackend(ImageBackend):
             return extra_img
         return cfg_img or extra_img
 
-    def _maps_for(self, source: str, width: int, height: int) -> dict:
-        key = f"{source}:{width}x{height}"
+    def _maps_for(self, source: str, width: int, height: int, extra: dict | None = None) -> dict:
+        extra = extra or {}
+        canny_src = self._canny_source(extra) if "canny" in self._cn_order else ""
+        key = f"{source}:{canny_src}:{width}x{height}"
         if key in self._maps_cache:
             return self._maps_cache[key]
         from .controlnet_prep import build_control_maps, pose_is_empty
@@ -274,18 +292,22 @@ class SDXLBackend(ImageBackend):
             height,
             cfg.get("modes") or ["openpose", "depth"],
             save_dir=save_dir,
+            canny_path=canny_src or None,
+            canny_low=int(cfg.get("canny_low") or 80),
+            canny_high=int(cfg.get("canny_high") or 200),
+            canny_align=str(cfg.get("canny_align") or "center"),
         )
         maps["_pose_empty"] = bool(maps.get("openpose") and pose_is_empty(maps["openpose"]))
         self._maps_cache[key] = maps
         return maps
 
-    def _cn_images_and_scales(self, maps: dict, extra: dict | None = None) -> tuple:
+    def _cn_images_and_scales(self, maps: dict, extra: dict | None = None, width: int | None = None, height: int | None = None) -> tuple:
         extra = extra or {}
         cfg = self._cn_cfg()
         images = []
         scales = []
-        w = int(self.config["width"])
-        h = int(self.config["height"])
+        w = int(width or self.config["width"])
+        h = int(height or self.config["height"])
         blank = None
         for name in self._cn_order:
             img = maps.get(name)
@@ -304,6 +326,12 @@ class SDXLBackend(ImageBackend):
                     scale = float(cfg.get("openpose_scale") or 0.55)
                     if maps.get("_pose_empty"):
                         scale = 0.0
+            elif name == "canny":
+                scale = (
+                    float(extra["canny_scale"])
+                    if extra.get("canny_scale") is not None
+                    else float(cfg.get("canny_scale") or 0.55)
+                )
             else:
                 scale = (
                     float(extra["depth_scale"])
@@ -327,12 +355,12 @@ class SDXLBackend(ImageBackend):
     ) -> str:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        prompt = compact_sdxl_prompt(prompt)
+        prompt = compact_sdxl_prompt(prompt, max_chars=420)
         trigger = str((self.config.get("lora") or {}).get("trigger") or "").strip()
         if (self.config.get("lora") or {}).get("enabled") and trigger:
             if trigger.lower() not in prompt.lower():
-                prompt = compact_sdxl_prompt(f"{trigger}, {prompt}")
-        negative = compact_sdxl_prompt(negative_prompt or "", max_chars=280)
+                prompt = compact_sdxl_prompt(f"{trigger}, {prompt}", max_chars=420)
+        negative = compact_sdxl_prompt(negative_prompt or "", max_chars=320)
         print(f"   SDXL prompt ({len(prompt)} chars): {prompt[:160]}{'…' if len(prompt) > 160 else ''}")
 
         generator = None
@@ -351,10 +379,12 @@ class SDXLBackend(ImageBackend):
                 if guidance < 1.0:
                     guidance = 5.0
 
+        width = int(self.config["width"])
+        height = int(self.config["height"])
         pipe_kwargs = dict(
             prompt=prompt,
-            height=int(self.config["height"]),
-            width=int(self.config["width"]),
+            height=height,
+            width=width,
             guidance_scale=guidance,
             num_inference_steps=steps,
             generator=generator,
@@ -362,52 +392,57 @@ class SDXLBackend(ImageBackend):
         if negative:
             pipe_kwargs["negative_prompt"] = negative
 
+        if use_ip:
+            ref = self._ip_source(extra)
+            scale = extra.get("ip_adapter_scale")
+            if scale is None:
+                scale = self._ip_cfg().get("scale") or 0.5
+            scale = float(scale)
+            self.pipe.set_ip_adapter_scale(scale)
+            if ref and Path(ref).is_file():
+                from .adapters import canvas_hw, layout_hw, load_rgb, pad_to_square
+
+                raw = load_rgb(ref)
+                ip_cfg = self._ip_cfg()
+                ip_img = pad_to_square(raw) if ip_cfg.get("pad_square", True) else raw
+                pipe_kwargs["ip_adapter_image"] = ip_img
+                fixed = layout_hw(str(ip_cfg.get("canvas") or "product"), long_side=1024)
+                if fixed:
+                    width, height = fixed
+                    pipe_kwargs["width"] = width
+                    pipe_kwargs["height"] = height
+                elif ip_cfg.get("match_aspect", True):
+                    long_side = max(int(self.config["width"]), int(self.config["height"]), 1024)
+                    max_aspect = float(ip_cfg.get("max_aspect") or (4 / 3))
+                    width, height = canvas_hw(raw, long_side, max_aspect=max_aspect)
+                    pipe_kwargs["width"] = width
+                    pipe_kwargs["height"] = height
+                print(
+                    f"   IP-Adapter Plus scale={scale}  ref={Path(ref).name} "
+                    f"{raw.size[0]}x{raw.size[1]} → canvas={width}x{height}"
+                )
+            else:
+                self.pipe.set_ip_adapter_scale(0.0)
+                print("⚠️  IP-Adapter Plus enabled but no reference image — scale=0")
+
         if use_cn:
             source = self._control_source(extra)
+            canny_src = self._canny_source(extra)
             images, scales = None, None
-            if source and Path(source).is_file():
-                maps = self._maps_for(source, int(self.config["width"]), int(self.config["height"]))
-                images, scales = self._cn_images_and_scales(maps, extra)
+            map_src = source or canny_src
+            if map_src and Path(map_src).is_file():
+                maps = self._maps_for(map_src, width, height, extra)
+                images, scales = self._cn_images_and_scales(maps, extra, width, height)
             if images is None:
                 from PIL import Image as PILImage
 
-                w, h = int(self.config["width"]), int(self.config["height"])
-                blanks = [PILImage.new("RGB", (w, h), (0, 0, 0)) for _ in self._cn_order]
+                blanks = [PILImage.new("RGB", (width, height), (0, 0, 0)) for _ in self._cn_order]
                 scales = [0.0] * len(self._cn_order)
                 images = blanks[0] if len(blanks) == 1 else blanks
                 print("⚠️  ControlNet: no usable maps — scales=0")
             pipe_kwargs["image"] = images
             pipe_kwargs["controlnet_conditioning_scale"] = scales
             print(f"   ControlNet scales: {self._cn_order} → {scales}")
-
-        if use_ip:
-            ref = self._ip_source(extra)
-            scale = extra.get("ip_adapter_scale")
-            if scale is None:
-                scale = self._ip_cfg().get("scale") or 0.6
-            scale = float(scale)
-            self.pipe.set_ip_adapter_scale(scale)
-            if ref and Path(ref).is_file():
-                from .adapters import canvas_hw, load_rgb, pad_to_square
-
-                raw = load_rgb(ref)
-                ip_cfg = self._ip_cfg()
-                ip_img = pad_to_square(raw) if ip_cfg.get("pad_square", True) else raw
-                pipe_kwargs["ip_adapter_image"] = ip_img
-                if ip_cfg.get("match_aspect", True):
-                    long_side = max(int(self.config["width"]), int(self.config["height"]), 1024)
-                    max_aspect = float(ip_cfg.get("max_aspect") or (4 / 3))
-                    w, h = canvas_hw(raw, long_side, max_aspect=max_aspect)
-                    pipe_kwargs["width"] = w
-                    pipe_kwargs["height"] = h
-                rw, rh = raw.size
-                print(
-                    f"   IP-Adapter Plus scale={scale}  ref={Path(ref).name} "
-                    f"{rw}x{rh} → canvas={pipe_kwargs.get('width')}x{pipe_kwargs.get('height')}"
-                )
-            else:
-                self.pipe.set_ip_adapter_scale(0.0)
-                print("⚠️  IP-Adapter Plus enabled but no reference image — scale=0")
 
         image = self.pipe(**pipe_kwargs).images[0]
         image.save(output_path)

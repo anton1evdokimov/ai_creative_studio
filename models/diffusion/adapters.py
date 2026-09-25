@@ -30,6 +30,17 @@ def pad_to_square(image: Image.Image, fill=(255, 255, 255)) -> Image.Image:
     return canvas
 
 
+def layout_hw(layout: str, long_side: int = 1024) -> tuple[int, int] | None:
+    """Fixed ad canvas. None → follow the product photo."""
+    name = (layout or "product").lower().strip()
+    long_side = max(64, (int(long_side) // 64) * 64)
+    if name in {"landscape", "horizontal", "wide"}:
+        return long_side, max(64, (round(long_side * 3 / 4) // 64) * 64)
+    if name in {"square"}:
+        return long_side, long_side
+    return None
+
+
 def canvas_hw(
     image: Image.Image,
     long_side: int = 1024,

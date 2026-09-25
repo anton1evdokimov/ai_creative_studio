@@ -46,15 +46,16 @@ advertisement, produce a polished, highly specific prompt set.
     (hoodie / t-shirt / serum bottle / etc) from context — never leave the subject unnamed.
     You MUST include:
     - EXACT product and its visual features from concept + context (if apparel: fabric, colorway, hood/pockets/print/fit;
-      if cosmetics: materials, cap, liquid, silhouette)
+      if bottle/food: label, cap, silhouette, liquid/color)
     - camera: e.g. 'Hasselblad X1D II, 80mm f/2.2 lens'
     - lighting: TLCI 98+, modifier, direction
-    - composition matching the concept
-    - background matching the concept (apparel: cyclorama / street wall / hanger — NOT a bottle pedestal unless it is cosmetics)
-    - style: commercial advertising or fashion lookbook photography, ultra sharp on the product
+    - a RICH physical scene: named location, surfaces, props, time of day (kitchen table, fridge door, wooden counter,
+      market stall, sunlit windowsill). Do NOT default to empty white cyclorama / seamless void.
+    - entire product in frame, no crop
+    - style: commercial advertising photography, ultra sharp on the product
     NO numbered lists, NO newlines inside the string.",
   "negative_prompt": "A single string, comma separated, ENGLISH only. If apparel: extra hoods, extra sleeves, melted fabric, deformed collar, extra limbs.
-    If bottled cosmetics: melted glass, broken bottle, extra dropper. Also: watermarks, captions, jpeg artifacts, cartoon, blurry.",
+    If bottle: cropped bottle, cut-off cap, melted glass, extra bottles. Also: empty white background, plain cyclorama, catalog void, watermarks, captions, jpeg artifacts, cartoon, blurry.",
   "style_boost_tags": ["list", "of", "2-6", "extra", "tags"],
   "estimated_prompt_strength_notes": "1 short sentence explaining how likely this prompt is to produce on-model luxury results for FLUX.1 schnell 4-step"
 }}

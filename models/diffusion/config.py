@@ -62,18 +62,25 @@ def load_diffusion_config() -> dict:
             "modes": ["openpose", "depth"],
             "openpose_scale": 0.55,
             "depth_scale": 0.65,
+            "canny_scale": 0.55,
+            "canny_low": 80,
+            "canny_high": 200,
             "openpose_model": "thibaud/controlnet-openpose-sdxl-1.0",
             "depth_model": "diffusers/controlnet-depth-sdxl-1.0",
+            "canny_model": "diffusers/controlnet-canny-sdxl-1.0",
             "save_maps": True,
             "image": "",
+            "canny_image": "",
+            "canny_align": "left",
         },
         "ip_adapter": {
             "enabled": False,
-            "scale": 0.6,
+            "scale": 0.5,
             "image": "",
             "pad_square": True,
             "match_aspect": True,
             "max_aspect": 1.333,
+            "canvas": "product",
         },
     }
 
@@ -93,6 +100,12 @@ def load_diffusion_config() -> dict:
         if not ip.is_absolute():
             ip = Path(__file__).resolve().parents[2] / ip
         merged["controlnet"]["image"] = str(ip)
+    canny_image = str(merged["controlnet"].get("canny_image") or "").strip()
+    if canny_image:
+        cp = Path(canny_image)
+        if not cp.is_absolute():
+            cp = Path(__file__).resolve().parents[2] / cp
+        merged["controlnet"]["canny_image"] = str(cp)
     ipa_defaults = defaults["ip_adapter"]
     ipa_src = config.get("ip_adapter") if isinstance(config.get("ip_adapter"), dict) else {}
     merged["ip_adapter"] = {**ipa_defaults, **ipa_src}
