@@ -56,8 +56,9 @@ diffusion:
     enabled: true
     scale: 0.6
     image: ""                                 # empty = product photo from generate()
-    pad_square: true                          # letterbox ref so CLIP does not crop a tall bottle
-    match_aspect: true                        # portrait/landscape canvas from the product photo
+    pad_square: true
+    match_aspect: true
+    max_aspect: 1.333                         # cap 4:3; skinny refs would otherwise zoom-crop
 
 pipeline:
   # How many concepts to generate from LLM

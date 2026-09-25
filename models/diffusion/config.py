@@ -73,6 +73,7 @@ def load_diffusion_config() -> dict:
             "image": "",
             "pad_square": True,
             "match_aspect": True,
+            "max_aspect": 1.333,
         },
     }
 

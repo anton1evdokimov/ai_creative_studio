@@ -30,16 +30,25 @@ def pad_to_square(image: Image.Image, fill=(255, 255, 255)) -> Image.Image:
     return canvas
 
 
-def canvas_hw(image: Image.Image, long_side: int = 768) -> tuple[int, int]:
+def canvas_hw(
+    image: Image.Image,
+    long_side: int = 1024,
+    max_aspect: float = 4 / 3,
+) -> tuple[int, int]:
+    """SDXL + IP-Adapter break on needle aspect (e.g. 256×1024) and zoom-crop the product.
+
+    Clamp to ≤4:3 so a tall bottle gets 768×1024, not a 1:4 strip.
+    """
     w, h = image.size
     long_side = max(64, (int(long_side) // 64) * 64)
-    if h >= w:
-        height = long_side
-        width = max(64, (round(long_side * w / h) // 64) * 64)
-    else:
-        width = long_side
-        height = max(64, (round(long_side * h / w) // 64) * 64)
-    return width, height
+    portrait = h >= w
+    src = (h / max(w, 1)) if portrait else (w / max(h, 1))
+    aspect = min(float(src), float(max_aspect))
+    aspect = max(aspect, 1.0)
+    short = max(64, (round(long_side / aspect) // 64) * 64)
+    if portrait:
+        return short, long_side
+    return long_side, short
 
 
 def attach_ip_adapter_plus(pipe, scale: float = 0.6):
