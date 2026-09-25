@@ -24,9 +24,12 @@ vlm:
   max_tokens: 900
 
 diffusion:
+  # sdxl | kandinsky5 — same LangGraph input (product photo + LLM prompts).
+  # sdxl: ControlNet / IP-Adapter. kandinsky5: I2I (photo → Qwen2.5-VL + DiT), no IP-Adapter.
+  backend: kandinsky5
   # Default: SDXL-Turbo (~7GB download, 4 steps). FLUX.1-schnell is ~20GB+ and too heavy on disk.
-  # Options: sdxl-turbo | sdxl | schnell | dev
-  model: sdxl-turbo
+  # Options: sdxl-turbo | sdxl | schnell | dev | kandinsky5
+  model: kandinsky5
   quantize: 4
   # Turbo is trained at 512; 768+ needs more RAM. Full SDXL can use 768 on 8GB.
   width: 512
@@ -45,7 +48,7 @@ diffusion:
   controlnet:
     enabled: true
     modes: [canny]
-    canny_scale: 0.35
+    canny_scale: 0.5
     canny_low: 60
     canny_high: 160
     openpose_scale: 0.0
@@ -56,12 +59,18 @@ diffusion:
     canny_align: left                         # left | center | right — bottle on landscape
   ip_adapter:
     enabled: true
-    scale: 0.4
+    scale: 0.5
     image: ""
     pad_square: true
     match_aspect: true
     max_aspect: 1.333
     canvas: landscape                         # product | landscape | square
+  kandinsky:
+    model: kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers
+    num_inference_steps: 50
+    guidance_scale: 3.5
+    width: 1280
+    height: 768
 
 pipeline:
   # How many concepts to generate from LLM

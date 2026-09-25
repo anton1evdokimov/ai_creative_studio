@@ -9,6 +9,8 @@ HF_MODELS = {
     "sdxl-turbo": "stabilityai/sdxl-turbo",
     "sdxl": "stabilityai/stable-diffusion-xl-base-1.0",
     "turbo": "stabilityai/sdxl-turbo",
+    "kandinsky5": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
+    "kandinsky": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
 }
 
 _CONFIG_CACHE = None
@@ -82,6 +84,15 @@ def load_diffusion_config() -> dict:
             "max_aspect": 1.333,
             "canvas": "product",
         },
+        "backend": "sdxl",
+        "kandinsky": {
+            "model": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
+            "num_inference_steps": 50,
+            "guidance_scale": 3.5,
+            "width": 1280,
+            "height": 768,
+            "image": "",
+        },
     }
 
     merged = {**defaults, **config}
@@ -115,6 +126,10 @@ def load_diffusion_config() -> dict:
         if not ipa.is_absolute():
             ipa = Path(__file__).resolve().parents[2] / ipa
         merged["ip_adapter"]["image"] = str(ipa)
+    k5_defaults = defaults["kandinsky"]
+    k5_src = config.get("kandinsky") if isinstance(config.get("kandinsky"), dict) else {}
+    merged["kandinsky"] = {**k5_defaults, **k5_src}
+    merged["backend"] = str(config.get("backend") or merged.get("backend") or "sdxl").lower()
     # Make output_dir absolute if relative
     out = Path(merged["output_dir"])
     if not out.is_absolute():
@@ -196,6 +211,11 @@ def load_pipeline_config() -> dict:
         "max_retries": 0,
     }
     return {**defaults, **config}
+
+
+def is_kandinsky_model(model: str, backend: str = "") -> bool:
+    blob = f"{backend} {model}".lower()
+    return "kandinsky" in blob
 
 
 def is_sdxl_model(model: str) -> bool:

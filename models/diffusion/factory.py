@@ -1,7 +1,7 @@
 import os
 import platform
 
-from .config import load_diffusion_config, is_sdxl_model
+from .config import is_kandinsky_model, is_sdxl_model, load_diffusion_config
 
 
 _backend = None
@@ -30,6 +30,13 @@ def create_image_backend():
     if _use_mock():
         from .mock_backend import MockImageBackend
         _backend = MockImageBackend(config)
+        return _backend
+
+    if is_kandinsky_model(str(config.get("model") or ""), str(config.get("backend") or "")):
+        print("🚀 Using Kandinsky 5 I2I backend")
+        from .kandinsky_backend import Kandinsky5Backend
+
+        _backend = Kandinsky5Backend(config)
         return _backend
 
     if is_sdxl_model(config.get("model", "")):
