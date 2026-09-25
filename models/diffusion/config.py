@@ -67,6 +67,11 @@ def load_diffusion_config() -> dict:
             "save_maps": True,
             "image": "",
         },
+        "ip_adapter": {
+            "enabled": False,
+            "scale": 0.6,
+            "image": "",
+        },
     }
 
     merged = {**defaults, **config}
@@ -85,6 +90,15 @@ def load_diffusion_config() -> dict:
         if not ip.is_absolute():
             ip = Path(__file__).resolve().parents[2] / ip
         merged["controlnet"]["image"] = str(ip)
+    ipa_defaults = defaults["ip_adapter"]
+    ipa_src = config.get("ip_adapter") if isinstance(config.get("ip_adapter"), dict) else {}
+    merged["ip_adapter"] = {**ipa_defaults, **ipa_src}
+    ipa_image = str(merged["ip_adapter"].get("image") or "").strip()
+    if ipa_image:
+        ipa = Path(ipa_image)
+        if not ipa.is_absolute():
+            ipa = Path(__file__).resolve().parents[2] / ipa
+        merged["ip_adapter"]["image"] = str(ipa)
     # Make output_dir absolute if relative
     out = Path(merged["output_dir"])
     if not out.is_absolute():

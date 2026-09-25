@@ -137,6 +137,7 @@ class FluxGenerator:
                 seed=index,
                 negative_prompt=rp.negative_prompt if rp else None,
                 control_image=product_image,
+                ip_adapter_image=product_image,
             )
 
             results.append(

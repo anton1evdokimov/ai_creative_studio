@@ -73,6 +73,7 @@ class SDXLBackend(ImageBackend):
         self.device = _pick_device()
         self._cn_order: list[str] = []
         self._maps_cache: dict[str, dict] = {}
+        self._ip_ready = False
         self.pipe = self._load_pipeline()
 
     def _cn_cfg(self) -> dict:
@@ -90,7 +91,13 @@ class SDXLBackend(ImageBackend):
                 return pipe
             print("⚠️  ControlNet failed to load — falling back to plain SDXL")
 
-        model_id = resolve_hf_model(self.config["model"])
+        from .config import HF_MODELS
+
+        if self._ip_enabled():
+            model_id = HF_MODELS["sdxl"]
+            print("⚠️  IP-Adapter Plus uses SDXL base (Turbo UNet is incompatible)")
+        else:
+            model_id = resolve_hf_model(self.config["model"])
         dtype = torch.float16 if self.device in {"cuda", "mps"} else torch.float32
         print(f"Loading SDXL ({model_id}) via Diffusers on {self.device}")
 
@@ -103,6 +110,7 @@ class SDXLBackend(ImageBackend):
             pipe = AutoPipelineForText2Image.from_pretrained(model_id, **kwargs)
 
         pipe = self._maybe_load_lora(pipe)
+        pipe = self._maybe_load_ip_adapter(pipe)
         return self._place_pipe(pipe)
 
     def _load_controlnet_pipeline(self):
@@ -153,6 +161,7 @@ class SDXLBackend(ImageBackend):
 
         self._cn_order = order
         pipe = self._maybe_load_lora(pipe)
+        pipe = self._maybe_load_ip_adapter(pipe)
         return self._place_pipe(pipe)
 
     def _place_pipe(self, pipe):
@@ -166,7 +175,7 @@ class SDXLBackend(ImageBackend):
                 self.device = "cpu"
                 pipe.to("cpu")
 
-        if hasattr(pipe, "enable_attention_slicing"):
+        if hasattr(pipe, "enable_attention_slicing") and not getattr(self, "_ip_ready", False):
             pipe.enable_attention_slicing()
         if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_slicing"):
             pipe.vae.enable_slicing()
@@ -206,6 +215,39 @@ class SDXLBackend(ImageBackend):
         except Exception as exc:
             print(f"⚠️  Failed to load LoRA ({type(exc).__name__}: {exc}) — generating without LoRA")
         return pipe
+
+    def _ip_cfg(self) -> dict:
+        return self.config.get("ip_adapter") or {}
+
+    def _ip_enabled(self) -> bool:
+        return bool(self._ip_cfg().get("enabled"))
+
+    def _maybe_load_ip_adapter(self, pipe):
+        self._ip_ready = False
+        if not self._ip_enabled():
+            return pipe
+        name = str(self.config.get("model", "")).lower()
+        if "turbo" in name and not self._cn_enabled():
+            print("⚠️  IP-Adapter Plus is trained for SDXL base; Turbo-only UNet may fail. Prefer diffusion.model: sdxl")
+        try:
+            from .adapters import attach_ip_adapter_plus
+
+            scale = float(self._ip_cfg().get("scale") or 0.6)
+            pipe = attach_ip_adapter_plus(pipe, scale=scale)
+            self._ip_ready = True
+            print(f"🧩 Loaded IP-Adapter Plus (scale={scale})")
+        except Exception as exc:
+            print(f"⚠️  IP-Adapter Plus failed ({type(exc).__name__}: {exc}) — generating without it")
+        return pipe
+
+    def _ip_source(self, extra: dict) -> str:
+        cfg_img = str(self._ip_cfg().get("image") or "").strip()
+        if cfg_img and Path(cfg_img).is_file():
+            return cfg_img
+        extra_img = str(extra.get("ip_adapter_image") or "").strip()
+        if extra_img and Path(extra_img).is_file():
+            return extra_img
+        return cfg_img or extra_img
 
     def _control_source(self, extra: dict) -> str:
         cfg_img = str(self._cn_cfg().get("image") or "").strip()
@@ -301,7 +343,8 @@ class SDXLBackend(ImageBackend):
         steps = int(self.config["num_inference_steps"])
         guidance = float(self.config["guidance_scale"])
         use_cn = self._cn_enabled() and self._cn_order
-        if use_cn:
+        use_ip = self._ip_enabled() and getattr(self, "_ip_ready", False)
+        if use_cn or use_ip:
             name = str(self.config.get("model", "")).lower()
             if "turbo" in name:
                 steps = max(steps, 20)
@@ -336,6 +379,22 @@ class SDXLBackend(ImageBackend):
             pipe_kwargs["image"] = images
             pipe_kwargs["controlnet_conditioning_scale"] = scales
             print(f"   ControlNet scales: {self._cn_order} → {scales}")
+
+        if use_ip:
+            ref = self._ip_source(extra)
+            scale = extra.get("ip_adapter_scale")
+            if scale is None:
+                scale = self._ip_cfg().get("scale") or 0.6
+            scale = float(scale)
+            self.pipe.set_ip_adapter_scale(scale)
+            if ref and Path(ref).is_file():
+                from .adapters import load_rgb
+
+                pipe_kwargs["ip_adapter_image"] = load_rgb(ref)
+                print(f"   IP-Adapter Plus scale={scale}  ref={Path(ref).name}")
+            else:
+                self.pipe.set_ip_adapter_scale(0.0)
+                print("⚠️  IP-Adapter Plus enabled but no reference image — scale=0")
 
         image = self.pipe(**pipe_kwargs).images[0]
         image.save(output_path)

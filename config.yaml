@@ -44,12 +44,18 @@ diffusion:
   # Flat-lay clothes: OpenPose often empty → scale 0; Depth still holds silhouette.
   # Heavy on 8GB — set enabled: false if OOM. pip install controlnet-aux opencv-python-headless
   controlnet:
-    enabled: true
+    enabled: false
     modes: [openpose, depth]
-    openpose_scale: 0.55
-    depth_scale: 0.65
+    openpose_scale: 0.0
+    depth_scale: 0.0
     save_maps: true
     image: "data/input/pose_ref.jpg"          # optional extra pose/ref photo; default = product_image
+  # One product photo → identity. Prompt still owns scene/light/style.
+  # Plus weights: h94/IP-Adapter ip-adapter-plus_sdxl_vit-h. Start scale 0.5–0.7.
+  ip_adapter:
+    enabled: true
+    scale: 0.6
+    image: ""                                 # empty = product photo from generate()
 
 pipeline:
   # How many concepts to generate from LLM
