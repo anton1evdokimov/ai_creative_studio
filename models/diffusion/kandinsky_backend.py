@@ -68,6 +68,31 @@ def _snap_hw(width: int, height: int) -> tuple[int, int]:
     return min(K5_SIZES, key=lambda hw: abs(hw[0] / hw[1] - target))
 
 
+def _compact_k5_prompt(text: str, max_chars: int = 480) -> str:
+    """Qwen2.5-VL in K5 I2I has 1024 tokens for template + image + text.
+
+    A long/repetitive LLM prompt truncates *image* tokens → tokens:0 features:198.
+    """
+    text = " ".join((text or "").split())
+    chunks = [p.strip() for p in text.split(",") if p.strip()]
+    kept = []
+    prev = ""
+    seen: dict[str, int] = {}
+    for chunk in chunks:
+        key = chunk.lower()
+        if key == prev:
+            continue
+        if seen.get(key, 0) >= 2:
+            continue
+        seen[key] = seen.get(key, 0) + 1
+        prev = key
+        kept.append(chunk)
+    compact = ", ".join(kept)
+    if len(compact) > max_chars:
+        compact = compact[:max_chars].rsplit(",", 1)[0]
+    return compact
+
+
 def _k5_cfg(config: dict) -> dict:
     return config.get("kandinsky") if isinstance(config.get("kandinsky"), dict) else {}
 
@@ -123,6 +148,11 @@ class Kandinsky5Backend(ImageBackend):
         generator = None
         if seed is not None:
             generator = torch.Generator("cpu").manual_seed(int(seed))
+
+        prompt = _compact_k5_prompt(prompt)
+        if negative_prompt:
+            negative_prompt = _compact_k5_prompt(negative_prompt, max_chars=280)
+        print(f"   K5 prompt ({len(prompt)} chars): {prompt[:160]}{'…' if len(prompt) > 160 else ''}")
 
         kwargs = dict(
             image=image,
