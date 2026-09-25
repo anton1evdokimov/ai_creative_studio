@@ -83,21 +83,37 @@ def build_depth_map(image: Image.Image) -> Image.Image | None:
     return depth.convert("RGB")
 
 
+def knockout_studio_bg(image: Image.Image, threshold: int = 238) -> Image.Image:
+    """Drop near-white packshot backdrop so Canny does not trace a vertical photo frame."""
+    import numpy as np
+
+    arr = np.array(image.convert("RGB"))
+    white = (
+        (arr[:, :, 0] >= threshold)
+        & (arr[:, :, 1] >= threshold)
+        & (arr[:, :, 2] >= threshold)
+    )
+    arr[white] = 0
+    return Image.fromarray(arr)
+
+
 def fit_contain(
     image: Image.Image,
     width: int,
     height: int,
     fill=(0, 0, 0),
     align: str = "center",
+    height_frac: float = 0.82,
 ) -> Image.Image:
     """Place a tall product on a wider canvas without stretching (letterbox)."""
-    image = image.convert("RGB")
+    image = knockout_studio_bg(image.convert("RGB"))
     w, h = image.size
-    scale = min(width / max(w, 1), height / max(h, 1))
+    box_h = max(1, int(height * float(height_frac)))
+    scale = min(width / max(w, 1), box_h / max(h, 1))
     nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
     resized = image.resize((nw, nh), Image.Resampling.LANCZOS)
     canvas = Image.new("RGB", (width, height), fill)
-    margin = int(width * 0.08)
+    margin = int(width * 0.10)
     side = (align or "center").lower()
     if side == "left":
         x = margin
@@ -112,8 +128,8 @@ def fit_contain(
 
 def build_canny_map(
     image: Image.Image,
-    low: int = 80,
-    high: int = 200,
+    low: int = 60,
+    high: int = 160,
 ) -> Image.Image | None:
     try:
         import cv2
@@ -124,7 +140,9 @@ def build_canny_map(
     print("   ControlNet: running Canny…")
     arr = np.array(image.convert("RGB"))
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(gray, int(low), int(high))
+    edges = cv2.GaussianBlur(edges, (5, 5), 0)
     rgb = np.stack([edges, edges, edges], axis=-1)
     return Image.fromarray(rgb)
 

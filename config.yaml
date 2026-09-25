@@ -45,9 +45,9 @@ diffusion:
   controlnet:
     enabled: true
     modes: [canny]
-    canny_scale: 0.55
-    canny_low: 80
-    canny_high: 200
+    canny_scale: 0.35
+    canny_low: 60
+    canny_high: 160
     openpose_scale: 0.0
     depth_scale: 0.0
     save_maps: true
@@ -56,7 +56,7 @@ diffusion:
     canny_align: left                         # left | center | right — bottle on landscape
   ip_adapter:
     enabled: true
-    scale: 0.5
+    scale: 0.4
     image: ""
     pad_square: true
     match_aspect: true
