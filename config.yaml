@@ -56,6 +56,8 @@ diffusion:
     enabled: true
     scale: 0.6
     image: ""                                 # empty = product photo from generate()
+    pad_square: true                          # letterbox ref so CLIP does not crop a tall bottle
+    match_aspect: true                        # portrait/landscape canvas from the product photo
 
 pipeline:
   # How many concepts to generate from LLM

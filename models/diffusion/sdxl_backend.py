@@ -388,10 +388,21 @@ class SDXLBackend(ImageBackend):
             scale = float(scale)
             self.pipe.set_ip_adapter_scale(scale)
             if ref and Path(ref).is_file():
-                from .adapters import load_rgb
+                from .adapters import canvas_hw, load_rgb, pad_to_square
 
-                pipe_kwargs["ip_adapter_image"] = load_rgb(ref)
-                print(f"   IP-Adapter Plus scale={scale}  ref={Path(ref).name}")
+                raw = load_rgb(ref)
+                ip_cfg = self._ip_cfg()
+                ip_img = pad_to_square(raw) if ip_cfg.get("pad_square", True) else raw
+                pipe_kwargs["ip_adapter_image"] = ip_img
+                if ip_cfg.get("match_aspect", True):
+                    long_side = max(int(self.config["width"]), int(self.config["height"]), 768)
+                    w, h = canvas_hw(raw, long_side)
+                    pipe_kwargs["width"] = w
+                    pipe_kwargs["height"] = h
+                print(
+                    f"   IP-Adapter Plus scale={scale}  ref={Path(ref).name}  "
+                    f"canvas={pipe_kwargs.get('width')}x{pipe_kwargs.get('height')}"
+                )
             else:
                 self.pipe.set_ip_adapter_scale(0.0)
                 print("⚠️  IP-Adapter Plus enabled but no reference image — scale=0")

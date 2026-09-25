@@ -71,6 +71,8 @@ def load_diffusion_config() -> dict:
             "enabled": False,
             "scale": 0.6,
             "image": "",
+            "pad_square": True,
+            "match_aspect": True,
         },
     }
 
