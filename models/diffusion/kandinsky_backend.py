@@ -93,6 +93,18 @@ def _compact_k5_prompt(text: str, max_chars: int = 480) -> str:
     return compact
 
 
+def _letterbox(image: Image.Image, width: int, height: int, fill=(245, 245, 245)) -> Image.Image:
+    """I2I resizes to canvas with stretch — pad first so a tall bottle keeps proportions."""
+    image = image.convert("RGB")
+    w, h = image.size
+    scale = min(width / max(w, 1), height / max(h, 1))
+    nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    resized = image.resize((nw, nh), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), fill)
+    canvas.paste(resized, ((width - nw) // 2, (height - nh) // 2))
+    return canvas
+
+
 def _k5_cfg(config: dict) -> dict:
     return config.get("kandinsky") if isinstance(config.get("kandinsky"), dict) else {}
 
@@ -140,10 +152,10 @@ class Kandinsky5Backend(ImageBackend):
         if not ref or not Path(ref).is_file():
             raise FileNotFoundError("Kandinsky 5 I2I needs a product photo (same --image as the pipeline).")
 
-        image = Image.open(ref).convert("RGB")
         w = int(k5.get("width") or self.config.get("width") or 1280)
         h = int(k5.get("height") or self.config.get("height") or 768)
         w, h = _snap_hw(w, h)
+        image = _letterbox(Image.open(ref).convert("RGB"), w, h)
 
         generator = None
         if seed is not None:

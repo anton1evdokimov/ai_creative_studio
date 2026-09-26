@@ -89,8 +89,8 @@ def load_diffusion_config() -> dict:
             "model": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
             "num_inference_steps": 50,
             "guidance_scale": 3.5,
-            "width": 1280,
-            "height": 768,
+            "width": 768,
+            "height": 1280,
             "image": "",
         },
     }
