@@ -11,6 +11,8 @@ HF_MODELS = {
     "turbo": "stabilityai/sdxl-turbo",
     "kandinsky5": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
     "kandinsky": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
+    "flux2": "black-forest-labs/FLUX.2-klein-4B",
+    "flux.2": "black-forest-labs/FLUX.2-klein-4B",
 }
 
 _CONFIG_CACHE = None
@@ -93,6 +95,14 @@ def load_diffusion_config() -> dict:
             "height": 1280,
             "image": "",
         },
+        "flux2": {
+            "model": "black-forest-labs/FLUX.2-klein-4B",
+            "num_inference_steps": 4,
+            "guidance_scale": 1.0,
+            "width": 768,
+            "height": 1280,
+            "image": "",
+        },
     }
 
     merged = {**defaults, **config}
@@ -129,6 +139,9 @@ def load_diffusion_config() -> dict:
     k5_defaults = defaults["kandinsky"]
     k5_src = config.get("kandinsky") if isinstance(config.get("kandinsky"), dict) else {}
     merged["kandinsky"] = {**k5_defaults, **k5_src}
+    f2_defaults = defaults["flux2"]
+    f2_src = config.get("flux2") if isinstance(config.get("flux2"), dict) else {}
+    merged["flux2"] = {**f2_defaults, **f2_src}
     merged["backend"] = str(config.get("backend") or merged.get("backend") or "sdxl").lower()
     # Make output_dir absolute if relative
     out = Path(merged["output_dir"])
@@ -149,9 +162,9 @@ def load_llm_config() -> dict:
     vlm_cfg = data.get("vlm") or {}
     defaults = {
         "mlx_model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
-        "cuda_model": "Qwen/Qwen2.5-3B-Instruct",
+        "cuda_model": "Qwen/Qwen2.5-32B-Instruct",
         "mlx_vlm_model": vlm_cfg.get("mlx_vlm_model") if isinstance(vlm_cfg, dict) else "mlx-community/Qwen2-VL-2B-Instruct-4bit",
-        "max_tokens": 800,
+        "max_tokens": 1200,
         "temperature": 0.7,
     }
     return {**defaults, **config}
@@ -162,8 +175,8 @@ def load_vlm_config() -> dict:
     config = data.get("vlm") or {}
     defaults = {
         "mlx_vlm_model": "mlx-community/Qwen2-VL-2B-Instruct-4bit",
-        "cuda_model": "Qwen/Qwen2-VL-2B-Instruct",
-        "max_tokens": 900,
+        "cuda_model": "Qwen/Qwen2.5-VL-32B-Instruct",
+        "max_tokens": 1200,
     }
     return {**defaults, **config}
 
@@ -175,21 +188,21 @@ def load_ranking_config() -> dict:
         "clip": True,
         "aesthetic": True,
         "dino": True,
-        "vlm_judge": False,
+        "vlm_judge": True,
         "vlm_gate": {
-            "min_clip_t": 0.55,
-            "min_clip_i": 0.45,
-            "min_pre_score": 0.55,
-            "top_k": 1,
+            "min_clip_t": 0.35,
+            "min_clip_i": 0.30,
+            "min_pre_score": 0.40,
+            "top_k": 2,
         },
         "clip_model": "openai/clip-vit-large-patch14",
         "dino_model": "facebook/dinov2-small",
         "weights": {
-            "clip_t": 0.30,
-            "clip_i": 0.15,
-            "dino_i": 0.20,
-            "aesthetic": 0.15,
-            "vlm": 0.10,
+            "clip_t": 0.20,
+            "clip_i": 0.10,
+            "dino_i": 0.15,
+            "aesthetic": 0.10,
+            "vlm": 0.35,
             "heuristics": 0.10,
         },
     }
@@ -211,6 +224,11 @@ def load_pipeline_config() -> dict:
         "max_retries": 0,
     }
     return {**defaults, **config}
+
+
+def is_flux2_model(model: str, backend: str = "") -> bool:
+    blob = f"{backend} {model}".lower().replace(" ", "")
+    return "flux2" in blob or "flux.2" in blob
 
 
 def is_kandinsky_model(model: str, backend: str = "") -> bool:

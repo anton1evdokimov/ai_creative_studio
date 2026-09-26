@@ -23,13 +23,16 @@ class CUDAVLMBackend:
             return
         t0 = time.time()
         print(f"   👁️  Loading CUDA VLM: {self.model_name} (first run may download)")
-        try:
-            from transformers import AutoProcessor, Qwen2VLForConditionalGeneration as ModelCls
-        except ImportError:
-            from transformers import AutoModelForVision2Seq as ModelCls
-            from transformers import AutoProcessor
+        name = self.model_name.lower()
+        if "qwen2.5-vl" in name or "qwen2_5_vl" in name:
+            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration as ModelCls
+        else:
+            try:
+                from transformers import AutoProcessor, Qwen2VLForConditionalGeneration as ModelCls
+            except ImportError:
+                from transformers import AutoProcessor, AutoModelForImageTextToText as ModelCls
 
-        kwargs = {"torch_dtype": torch.float16, "device_map": "auto"}
+        kwargs = {"torch_dtype": torch.bfloat16, "device_map": "auto"}
         try:
             self._model = ModelCls.from_pretrained(self.model_name, **kwargs)
         except Exception:

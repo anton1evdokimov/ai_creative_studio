@@ -1,7 +1,7 @@
 import os
 import platform
 
-from .config import is_kandinsky_model, is_sdxl_model, load_diffusion_config
+from .config import is_flux2_model, is_kandinsky_model, is_sdxl_model, load_diffusion_config
 
 
 _backend = None
@@ -30,6 +30,13 @@ def create_image_backend():
     if _use_mock():
         from .mock_backend import MockImageBackend
         _backend = MockImageBackend(config)
+        return _backend
+
+    if is_flux2_model(str(config.get("model") or ""), str(config.get("backend") or "")):
+        print("🚀 Using FLUX.2 backend")
+        from .flux2_backend import Flux2Backend
+
+        _backend = Flux2Backend(config)
         return _backend
 
     if is_kandinsky_model(str(config.get("model") or ""), str(config.get("backend") or "")):

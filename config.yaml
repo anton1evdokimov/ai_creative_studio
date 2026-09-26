@@ -12,20 +12,19 @@
 
 llm:
   mlx_model: mlx-community/Qwen2.5-3B-Instruct-4bit
-  cuda_model: Qwen/Qwen2.5-3B-Instruct
-  max_tokens: 800         # raised from 500 — product analysis + refinement need more tokens
+  cuda_model: Qwen/Qwen2.5-32B-Instruct
+  max_tokens: 1200
   temperature: 0.7
 
 vlm:
-  # Vision model used for: input product analysis, generated-image scoring, captioning.
-  # On 8GB M1 you MUST use 4-bit quant. Qwen2-VL-2B works; 7B will OOM.
   mlx_vlm_model: mlx-community/Qwen2-VL-2B-Instruct-4bit
-  cuda_model: Qwen/Qwen2-VL-2B-Instruct
-  max_tokens: 900
+  # A100 80GB: unload VLM before diffusion. 32B ≈ 60GB bf16.
+  cuda_model: Qwen/Qwen2.5-VL-32B-Instruct
+  max_tokens: 1200
 
 diffusion:
-  # sdxl | kandinsky5 — same LangGraph input (product photo + LLM prompts).
-  # sdxl: ControlNet / IP-Adapter. kandinsky5: I2I (photo → Qwen2.5-VL + DiT), no IP-Adapter.
+  # sdxl | kandinsky5 | flux2 — same LangGraph input (product photo + LLM prompts).
+  # sdxl: ControlNet / IP-Adapter. kandinsky5: I2I. flux2: Klein reference image=.
   backend: kandinsky5
   # Default: SDXL-Turbo (~7GB download, 4 steps). FLUX.1-schnell is ~20GB+ and too heavy on disk.
   # Options: sdxl-turbo | sdxl | schnell | dev | kandinsky5
@@ -71,6 +70,12 @@ diffusion:
     guidance_scale: 3.5
     width: 768
     height: 1280
+  flux2:
+    model: black-forest-labs/FLUX.2-klein-4B
+    num_inference_steps: 4
+    guidance_scale: 1.0
+    width: 768
+    height: 1280
 
 pipeline:
   # How many concepts to generate from LLM
@@ -93,19 +98,18 @@ ranking:
   dino: true
   dino_model: facebook/dinov2-small
   # 2B VLM-as-judge is a future slot — noisy on Qwen2-VL-2B, keep off by default
-  vlm_judge: false
-  # When vlm_judge is true: run VLM only on images that already look good to CLIP.
+  vlm_judge: true
   vlm_gate:
-    min_clip_t: 0.55
-    min_clip_i: 0.45      # ignored if there is no product photo
-    min_pre_score: 0.55   # CLIP+aesthetic+heuristics blend before VLM
-    top_k: 1              # at most this many images go to VLM
+    min_clip_t: 0.35
+    min_clip_i: 0.30
+    min_pre_score: 0.40
+    top_k: 2
   clip_model: openai/clip-vit-large-patch14
   weights:
-    clip_t: 0.30
-    clip_i: 0.15
-    dino_i: 0.20
-    aesthetic: 0.15
-    vlm: 0.10
+    clip_t: 0.20
+    clip_i: 0.10
+    dino_i: 0.15
+    aesthetic: 0.10
+    vlm: 0.35
     heuristics: 0.10
 
