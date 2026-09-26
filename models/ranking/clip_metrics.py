@@ -121,7 +121,6 @@ class CLIPMetrics:
         self.model_id = model_id
         self.use_aesthetic = use_aesthetic
         self.device = device or _device()
-        self.dtype = torch.float16 if self.device in {"cuda", "mps"} else torch.float32
         self.model = None
         self.processor = None
         self.aesthetic = None
@@ -131,10 +130,10 @@ class CLIPMetrics:
     def _load(self) -> None:
         from transformers import CLIPModel, CLIPProcessor
 
-        print(f"📎 Loading CLIP ({self.model_id}) on {self.device}")
+        print(f"📎 Loading CLIP ({self.model_id}) on {self.device} fp32")
         self.processor = CLIPProcessor.from_pretrained(self.model_id)
         self.model = CLIPModel.from_pretrained(self.model_id)
-        self.model.to(self.device, dtype=self.dtype)
+        self.model.to(self.device)
         self.model.eval()
         if self.use_aesthetic:
             self.aesthetic = self._load_aesthetic(self.model.config.projection_dim)
@@ -164,58 +163,13 @@ class CLIPMetrics:
         print("   Aesthetic predictor ready")
         return mlp
 
-    def _project_if_needed(self, pooled: torch.Tensor, *, image: bool) -> torch.Tensor:
-        proj_name = "visual_projection" if image else "text_projection"
-        proj = getattr(self.model, proj_name, None)
-        if proj is None:
-            return pooled
-        in_dim = int(proj.weight.shape[1])
-        dim = int(pooled.shape[-1])
-        if dim == in_dim:
-            x = pooled.detach().to(device=proj.weight.device, dtype=proj.weight.dtype)
-            return proj(x)
-        return pooled.detach()
-
-    def _encoder_hidden(self, feat, *, image: bool):
-        inner = getattr(feat, "vision_model_output" if image else "text_model_output", None)
-        pooled = getattr(feat, "pooler_output", None)
-        if pooled is None and inner is not None:
-            pooled = getattr(inner, "pooler_output", None)
-        hs = getattr(feat, "last_hidden_state", None)
-        if hs is None and inner is not None:
-            hs = getattr(inner, "last_hidden_state", None)
-        return pooled, hs
-
-    def _to_embed(self, feat, *, image: bool) -> torch.Tensor:
-        """Map CLIP outputs into the shared 768-d (ViT-L) embedding space.
-
-        get_*_features already returns the projected vector — do not project again.
-        Encoder ModelOutput needs last_hidden (1024 for vision) then visual_projection.
-        """
+    def _as_embed(self, feat) -> torch.Tensor:
         if torch.is_tensor(feat):
             t = feat
         else:
-            t = None
-            for attr in ("image_embeds", "text_embeds"):
-                val = getattr(feat, attr, None)
-                if val is not None and torch.is_tensor(val):
-                    t = val
-                    break
+            t = getattr(feat, "image_embeds", None)
             if t is None:
-                pooled, hs = self._encoder_hidden(feat, image=image)
-                proj = getattr(self.model, "visual_projection" if image else "text_projection", None)
-                in_dim = int(proj.weight.shape[1]) if proj is not None else None
-                # Prefer the pre-projection hidden state (ViT-L vision = 1024).
-                if hs is not None and torch.is_tensor(hs) and in_dim and int(hs.shape[-1]) == in_dim:
-                    t = self._project_if_needed(hs[:, 0], image=image)
-                elif pooled is not None and torch.is_tensor(pooled) and in_dim and int(pooled.shape[-1]) == in_dim:
-                    t = self._project_if_needed(pooled, image=image)
-                elif pooled is not None and torch.is_tensor(pooled):
-                    t = pooled
-                elif hs is not None and torch.is_tensor(hs):
-                    t = self._project_if_needed(hs[:, 0], image=image)
-            if t is None and isinstance(feat, (tuple, list)) and feat and torch.is_tensor(feat[0]):
-                t = feat[0]
+                t = getattr(feat, "text_embeds", None)
         if t is None:
             raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
         if t.dim() == 1:
@@ -225,34 +179,9 @@ class CLIPMetrics:
     @torch.inference_mode()
     def _image_embed(self, image: Image.Image) -> torch.Tensor:
         inputs = self.processor(images=image, return_tensors="pt")
-        pixel = inputs["pixel_values"].to(self.device, dtype=self.dtype)
-        try:
-            feat = self.model.get_image_features(pixel_values=pixel)
-        except TypeError:
-            feat = self.model.get_image_features(**inputs.to(self.device))
-        feat = self._to_embed(feat, image=True)
-        return F.normalize(feat.float(), dim=-1).detach().clone()
-
-    @torch.inference_mode()
-    def _text_embed(self, text: str) -> torch.Tensor:
-        inputs = self.processor(
-            text=[text[:300] if text else "a product photo"],
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=77,
-        )
-        ids = inputs["input_ids"].to(self.device)
-        kwargs = {"input_ids": ids}
-        mask = inputs.get("attention_mask")
-        if mask is not None:
-            kwargs["attention_mask"] = mask.to(self.device)
-        try:
-            feat = self.model.get_text_features(**kwargs)
-        except TypeError:
-            feat = self.model.get_text_features(input_ids=ids)
-        feat = self._to_embed(feat, image=False)
-        return F.normalize(feat.float(), dim=-1).detach().clone()
+        pixel = inputs["pixel_values"].to(self.device)
+        feat = self.model.get_image_features(pixel_values=pixel)
+        return F.normalize(self._as_embed(feat).float(), dim=-1).detach().clone()
 
     @torch.inference_mode()
     def score(
@@ -276,9 +205,20 @@ class CLIPMetrics:
             return CLIPScores()
 
         gen = Image.open(path).convert("RGB")
-        img_emb = self._image_embed(gen)
-        txt_emb = self._text_embed(prompt_text or "commercial product photography")
-        cos_t = float((img_emb @ txt_emb.T).squeeze().cpu())
+        query = (prompt_text or "a product photograph")[:300]
+        paired = self.processor(
+            text=[query],
+            images=gen,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77,
+        )
+        paired = {k: v.to(self.device) for k, v in paired.items()}
+        out = self.model(**paired)
+        img_emb = F.normalize(out.image_embeds.float(), dim=-1)
+        txt_emb = F.normalize(out.text_embeds.float(), dim=-1)
+        cos_t = float((img_emb * txt_emb).sum(dim=-1).squeeze().cpu())
 
         clip_i = clip_i_raw = None
         if product_image_path:
