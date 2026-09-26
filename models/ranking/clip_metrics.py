@@ -59,6 +59,53 @@ class AestheticMLP(nn.Module):
         return self.layers(x)
 
 
+_CLIP_SKIP = (
+    "hasselblad",
+    "phase one",
+    "tlci",
+    "octabox",
+    "strip box",
+    "8k",
+    "4k",
+    "masterpiece",
+    "awards",
+    "iq4",
+    "150mp",
+)
+
+
+def clip_alignment_text(
+    prompt: str = "",
+    concept=None,
+    product: dict | None = None,
+) -> str:
+    """Short English caption for CLIP-T. ViT-L/14 dies on 400-char refine prompts."""
+    pa = product or {}
+    name = str(pa.get("product_name") or pa.get("product_type") or "").strip()
+    bits: list[str] = []
+    if name:
+        bits.append(name)
+    if concept is not None:
+        for attr in ("scene", "lighting", "style", "mood"):
+            v = str(getattr(concept, attr, None) or "").strip()
+            if v:
+                bits.append(v)
+    if bits:
+        return ("a photograph of " + ", ".join(bits))[:240]
+    skip = _CLIP_SKIP
+    chunks = [c.strip() for c in (prompt or "").split(",") if c.strip()]
+    kept = []
+    for c in chunks:
+        low = c.lower()
+        if any(s in low for s in skip):
+            continue
+        kept.append(c)
+        if len(", ".join(kept)) > 200:
+            break
+    body = ", ".join(kept[:8]) if kept else (prompt or "a product photograph")
+    return ("a photograph of " + body)[:240]
+
+
 def _clip01_from_cosine(cos: float) -> float:
     """CLIPScore-style 0..1 for image–text. Saturates at cosine 0.4."""
     return round(max(0.0, min(1.0, 2.5 * max(float(cos), 0.0))), 4)

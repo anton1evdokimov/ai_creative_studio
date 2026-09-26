@@ -339,6 +339,15 @@ def evaluate_images(state):
             return getattr(gr, "prompt", "") or ""
         return ""
 
+    def _clip_text_for(i: int, prompt: str) -> str:
+        from models.ranking.clip_metrics import clip_alignment_text
+
+        concept = None
+        if i < len(generation_results):
+            rp = getattr(generation_results[i], "refined_prompt", None)
+            concept = getattr(rp, "concept", None) if rp is not None else None
+        return clip_alignment_text(prompt, concept=concept, product=pa if isinstance(pa, dict) else {})
+
     def _blend(clip_m, vlm_s, heur: float, dino_i=None) -> float:
         parts = []
         wsum = 0.0
@@ -385,7 +394,9 @@ def evaluate_images(state):
         q = analyze_quality(path, expected_width=target_w, expected_height=target_h)
         clip_m = None
         if clipper is not None:
-            clip_m = clipper.score(path, prompt, product_image_path=product_image or None)
+            clip_text = _clip_text_for(idx, prompt)
+            print(f"       CLIP query: {clip_text[:160]}")
+            clip_m = clipper.score(path, clip_text, product_image_path=product_image or None)
             print(
                 f"       CLIP-T={clip_m.clip_t:.2f} (cos={clip_m.clip_t_raw:.3f})"
                 + (f"  CLIP-I={clip_m.clip_i:.2f}" if clip_m.clip_i is not None else "")

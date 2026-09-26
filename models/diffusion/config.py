@@ -190,7 +190,7 @@ def load_ranking_config() -> dict:
         "dino": True,
         "vlm_judge": True,
         "vlm_gate": {
-            "min_clip_t": 0.35,
+            "min_clip_t": 0.0,
             "min_clip_i": 0.30,
             "min_pre_score": 0.40,
             "top_k": 2,
