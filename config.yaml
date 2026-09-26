@@ -25,10 +25,10 @@ vlm:
 diffusion:
   # sdxl | kandinsky5 | flux2 — same LangGraph input (product photo + LLM prompts).
   # sdxl: ControlNet / IP-Adapter. kandinsky5: I2I. flux2: Klein reference image=.
-  backend: kandinsky5
+  backend: flux2
   # Default: SDXL-Turbo (~7GB download, 4 steps). FLUX.1-schnell is ~20GB+ and too heavy on disk.
-  # Options: sdxl-turbo | sdxl | schnell | dev | kandinsky5
-  model: kandinsky5
+  # Options: sdxl-turbo | sdxl | schnell | dev | kandinsky5 | flux2
+  model: flux2
   quantize: 4
   # Turbo is trained at 512; 768+ needs more RAM. Full SDXL can use 768 on 8GB.
   width: 512
@@ -85,10 +85,10 @@ pipeline:
   # Evaluation threshold (0.0 = always end, no retries on 8GB to save time)
   # Increase to e.g. 0.70 once you're happy with setup and want to enable the
   # improve_prompt → refine_prompts → generation retry loop
-  quality_threshold: 0.0
+  quality_threshold: 0.7
   # Max retries for prompt improvement (0 = disable retries on 8GB)
   # Raise together with quality_threshold once stable.
-  max_retries: 0
+  max_retries: 3
 
 ranking:
   # CLIP-T (prompt), CLIP-I (vs product photo), LAION aesthetic on CLIP ViT-L/14
