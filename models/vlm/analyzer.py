@@ -32,7 +32,7 @@ Return ONLY a valid JSON object (no markdown fences, no extra prose) with these 
   "brand_visual_cues": ["... max 4"],
   "key_visual_features": ["hood", "kangaroo pocket", "... max 5"],
   "packaging_type": "garment / hangtag / bottle / box",
-  "extracted_text_ocr": "",
+  "extracted_text_ocr": "line1\\nline2\\nline3 — ALL visible label lines, keep order top-to-bottom",
   "visual_caption": "ONE short sentence",
   "suggested_target_audience": "short phrase"
 }}
@@ -179,6 +179,10 @@ class ProductAnalyzer:
         if lux not in allowed_lux:
             lux = "mid-range"
 
+        ocr = parsed.get("extracted_text_ocr")
+        if isinstance(ocr, list):
+            ocr = "\n".join(str(x).strip() for x in ocr if str(x).strip())
+
         return ProductAnalysis(
             category=_str(parsed.get("category"), 160),
             product_type=_str(parsed.get("product_type"), 160),
@@ -192,7 +196,7 @@ class ProductAnalyzer:
             brand_visual_cues=_lst(parsed.get("brand_visual_cues"), 12),
             key_visual_features=_lst(parsed.get("key_visual_features"), 14),
             packaging_type=_str(parsed.get("packaging_type"), 160),
-            extracted_text_ocr=_str(parsed.get("extracted_text_ocr"), 600),
+            extracted_text_ocr=_str(ocr, 600),
             visual_caption=_str(parsed.get("visual_caption"), 900),
             suggested_target_audience=_str(parsed.get("suggested_target_audience"), 600),
             raw_notes=(

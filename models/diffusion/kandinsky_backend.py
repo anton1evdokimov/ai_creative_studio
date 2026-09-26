@@ -68,6 +68,32 @@ def _snap_hw(width: int, height: int) -> tuple[int, int]:
     return min(K5_SIZES, key=lambda hw: abs(hw[0] / hw[1] - target))
 
 
+def _label_block(label: str, max_chars: int = 280) -> str:
+    text = (label or "").replace("\\n", "\n").replace("|", "\n")
+    lines = []
+    for raw in text.splitlines():
+        line = " ".join(raw.split())
+        if line:
+            lines.append(line[:90])
+        if len(lines) >= 8:
+            break
+    if not lines:
+        return ""
+    numbered = "\n".join(f"{i}) {line}" for i, line in enumerate(lines, 1))
+    if len(numbered) > max_chars:
+        numbered = numbered[:max_chars].rsplit("\n", 1)[0]
+    return (
+        "Keep original packaging text exactly, stacked top-to-bottom as on the bottle "
+        f"(do not merge lines, do not add lines):\n{numbered}\n"
+    )
+
+
+_TEXT_NEG = (
+    "misspelled text, garbled letters, fake brand, extra words on label, "
+    "illegible typography, random alphabet, duplicated logo"
+)
+
+
 def _compact_k5_prompt(text: str, max_chars: int = 480) -> str:
     """Qwen2.5-VL in K5 I2I has 1024 tokens for template + image + text.
 
@@ -161,9 +187,18 @@ class Kandinsky5Backend(ImageBackend):
         if seed is not None:
             generator = torch.Generator("cpu").manual_seed(int(seed))
 
-        prompt = _compact_k5_prompt(prompt)
+        prompt = _compact_k5_prompt(prompt, max_chars=320)
+        label = str(extra.get("label_text") or "").strip()
+        lock = _label_block(label)
+        if lock:
+            prompt = f"{lock}{prompt}"
+            print(f"   K5 lock label ({label.count(chr(10))+1} lines): {label[:80]!r}")
         if negative_prompt:
-            negative_prompt = _compact_k5_prompt(negative_prompt, max_chars=280)
+            negative_prompt = _compact_k5_prompt(negative_prompt, max_chars=240)
+            if _TEXT_NEG not in negative_prompt:
+                negative_prompt = f"{negative_prompt}, {_TEXT_NEG}"
+        else:
+            negative_prompt = _TEXT_NEG
         print(f"   K5 prompt ({len(prompt)} chars): {prompt[:160]}{'…' if len(prompt) > 160 else ''}")
 
         kwargs = dict(

@@ -116,6 +116,13 @@ class FluxGenerator:
 
             noun = product_noun(product_analysis, product_description, product_image)
             prompt = ensure_product_lead(prompt, noun)
+            label_text = ""
+            if isinstance(product_analysis, dict):
+                raw_ocr = str(product_analysis.get("extracted_text_ocr") or "").strip()
+                if raw_ocr and len(raw_ocr) > 1 and "no legible" not in raw_ocr.lower():
+                    label_text = raw_ocr.replace("\\n", "\n")[:400]
+                elif product_analysis.get("product_name"):
+                    label_text = str(product_analysis["product_name"])[:80]
 
             slug = concept.name.lower().replace(" ", "_") or f"concept_{index}"
             slug = "".join(ch for ch in slug if ch.isalnum() or ch in "_-")[:60] or f"concept_{index}"
@@ -138,6 +145,7 @@ class FluxGenerator:
                 negative_prompt=rp.negative_prompt if rp else None,
                 control_image=product_image,
                 ip_adapter_image=product_image,
+                label_text=label_text,
             )
 
             results.append(
