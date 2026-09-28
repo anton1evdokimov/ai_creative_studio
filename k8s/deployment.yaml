@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: studio
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: studio
+  template:
+    metadata:
+      labels:
+        app: studio
+    spec:
+      restartPolicy: Always
+      # runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: studio
+          image: ai-creative-studio:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: HF_HOME
+              value: /models/hf
+            - name: HUGGINGFACE_HUB_CACHE
+              value: /models/hf
+            - name: TRANSFORMERS_CACHE
+              value: /models/hf
+            - name: AICS_INPUT_DIR
+              value: /data/input
+            - name: AICS_OUTPUT_DIR
+              value: /app/generated
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+                  optional: true
+          resources:
+            requests:
+              cpu: "8"
+              memory: 80Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "16"
+              memory: 80Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /models/hf
+            - name: studio-data
+              mountPath: /data
+            - name: studio-data
+              mountPath: /app/generated
+              subPath: generated
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+            - name: dshm
+              mountPath: /dev/shm
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hf-cache
+        - name: studio-data
+          persistentVolumeClaim:
+            claimName: studio-data
+        - name: config
+          configMap:
+            name: studio-config
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
