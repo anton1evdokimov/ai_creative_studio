@@ -74,7 +74,7 @@ def _result_html(payload: dict) -> str:
         cards.append(
             f'<figure><img src="{src}" alt="{name}">'
             f"<figcaption>{name} · score={s.get('score')} · "
-            f"CLIP-T={s.get('clip_t')} · CLIP-I={s.get('clip_i')}</figcaption></figure>"
+            f"CLIP-T={s.get('clip_t')} · CLIP-I={s.get('clip_i')} · CER={s.get('cer')}</figcaption></figure>"
         )
     best = payload.get("best_image") or ""
     best_block = (
@@ -156,6 +156,9 @@ async def generate(
                 "clip_t": e.clip_metrics.clip_t if e.clip_metrics else None,
                 "clip_i": e.clip_metrics.clip_i if e.clip_metrics else None,
                 "aesthetic": e.clip_metrics.aesthetic if e.clip_metrics else None,
+                "cer": e.cer,
+                "cer_score": e.cer_score,
+                "ocr_text": e.ocr_text,
             }
             for e in evals
         ],

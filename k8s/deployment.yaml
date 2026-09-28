@@ -34,6 +34,10 @@ spec:
               value: /data/input
             - name: AICS_OUTPUT_DIR
               value: /app/generated
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
             - name: HF_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -77,7 +81,7 @@ spec:
       volumes:
         - name: hf-cache
           hostPath:
-            path: /mnt/evo4tb/evdokimov/.hf_cache
+            path: /mnt/evo4tb/evdokimov/.hf_cache_k8s
             type: Directory
         - name: studio-data
           hostPath:

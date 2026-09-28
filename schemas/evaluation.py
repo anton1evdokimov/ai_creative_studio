@@ -56,4 +56,7 @@ class ImageEvaluation(BaseModel):
     vlm_scores: Optional[VLMImageScores] = None
     dino_i: Optional[float] = None
     dino_i_raw: Optional[float] = None
+    cer: Optional[float] = None           # 0 = perfect match, 1 = all wrong
+    cer_score: Optional[float] = None     # 1 - cer, for the blend
+    ocr_text: str = ""
     score: float = 0.0  # final blended score used by router

@@ -307,6 +307,8 @@ def evaluate_images(state):
     use_aes = bool(rank_cfg.get("aesthetic"))
     use_vlm = bool(rank_cfg.get("vlm_judge"))
     use_dino = bool(rank_cfg.get("dino"))
+    use_cer = bool(rank_cfg.get("cer"))
+    ocr_lang = str(rank_cfg.get("ocr_lang") or "rus+eng")
     weights = rank_cfg.get("weights") or {}
 
     diff_cfg = load_diffusion_config()
@@ -348,7 +350,7 @@ def evaluate_images(state):
             concept = getattr(rp, "concept", None) if rp is not None else None
         return clip_alignment_text(prompt, concept=concept, product=pa if isinstance(pa, dict) else {})
 
-    def _blend(clip_m, vlm_s, heur: float, dino_i=None) -> float:
+    def _blend(clip_m, vlm_s, heur: float, dino_i=None, cer_score=None) -> float:
         parts = []
         wsum = 0.0
 
@@ -368,6 +370,7 @@ def evaluate_images(state):
         if vlm_s is not None:
             add("vlm", vlm_s.overall)
         add("dino_i", dino_i)
+        add("cer", cer_score)
         add("heuristics", heur)
         if wsum <= 0:
             return round(float(heur or 0.0), 3)
@@ -413,6 +416,9 @@ def evaluate_images(state):
             "vlm_s": None,
             "dino_i": None,
             "dino_i_raw": None,
+            "cer": None,
+            "cer_score": None,
+            "ocr_text": "",
         })
         print(f"       pre-score={pre:.3f}")
 
@@ -436,6 +442,26 @@ def evaluate_images(state):
             print("   ♻️  Unloaded DINOv2")
         except Exception as exc:
             print(f"⚠️  DINOv2 skipped: {type(exc).__name__}: {exc}")
+
+    if use_cer and rows:
+        try:
+            from models.ranking.cer import score_cer
+
+            for r in rows:
+                cer, cer_s, ocr_txt = score_cer(r["path"], pa if isinstance(pa, dict) else {}, ocr_lang)
+                r["cer"], r["cer_score"], r["ocr_text"] = cer, cer_s, ocr_txt
+                if cer is None:
+                    print(f"       {r['path'].split('/')[-1]} CER skipped (no label text)")
+                else:
+                    print(
+                        f"       {r['path'].split('/')[-1]} CER={cer:.3f} "
+                        f"(score={cer_s:.3f})  ocr={ocr_txt[:80]!r}"
+                    )
+                r["pre"] = _blend(
+                    r["clip_m"], None, r["q"]["quality_factor"], r.get("dino_i"), r.get("cer_score")
+                )
+        except Exception as exc:
+            print(f"⚠️  CER/OCR skipped: {type(exc).__name__}: {exc}")
 
     vlm_idxs = []
     if use_vlm and rows:
@@ -477,7 +503,7 @@ def evaluate_images(state):
 
     for r in rows:
         clip_m, vlm_s, q = r["clip_m"], r["vlm_s"], r["q"]
-        final = _blend(clip_m, vlm_s, q["quality_factor"], r.get("dino_i"))
+        final = _blend(clip_m, vlm_s, q["quality_factor"], r.get("dino_i"), r.get("cer_score"))
         typed = ImageEvaluation(
             image_path=r["path"],
             prompt=r["prompt"],
@@ -487,6 +513,9 @@ def evaluate_images(state):
             vlm_scores=vlm_s,
             dino_i=r.get("dino_i"),
             dino_i_raw=r.get("dino_i_raw"),
+            cer=r.get("cer"),
+            cer_score=r.get("cer_score"),
+            ocr_text=r.get("ocr_text") or "",
             score=final,
         )
         typed_results.append(typed)
@@ -500,6 +529,9 @@ def evaluate_images(state):
             "clip_i": clip_m.clip_i if clip_m else None,
             "dino_i": r.get("dino_i"),
             "dino_i_raw": r.get("dino_i_raw"),
+            "cer": r.get("cer"),
+            "cer_score": r.get("cer_score"),
+            "ocr_text": r.get("ocr_text") or "",
             "aesthetic": clip_m.aesthetic if clip_m else None,
             "quality": q["quality_factor"],
             "blur": q.get("blur_score"),

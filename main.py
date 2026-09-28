@@ -183,7 +183,7 @@ def main() -> int:
         if evals_typed or evals:
             print("\n📊 [Stage 6] Image Evaluation (CLIP + aesthetic" + ("" if not any(getattr(e, "vlm_scores", None) for e in evals_typed) else " + VLM") + ")")
             if evals_typed:
-                hdr = f"  {'#':>2}  final  clipT clipI aesth   file"
+                hdr = f"  {'#':>2}  final  clipT clipI aesth  CER    file"
                 print(hdr)
                 print("  " + "-" * (len(hdr) - 2))
                 for idx, e in enumerate(evals_typed, 1):
@@ -193,7 +193,10 @@ def main() -> int:
                     clip_t = f"{cm.clip_t:4.2f}" if cm else "  — "
                     clip_i = f"{cm.clip_i:4.2f}" if (cm and cm.clip_i is not None) else "  — "
                     aes = f"{cm.aesthetic:4.2f}" if cm else "  — "
-                    print(f"  {idx:>2} {mark} {e.score:5.3f}  {clip_t}  {clip_i}  {aes}   {name}")
+                    cer = f"{e.cer:4.2f}" if e.cer is not None else "  — "
+                    print(f"  {idx:>2} {mark} {e.score:5.3f}  {clip_t}  {clip_i}  {aes}  {cer}   {name}")
+                    if e.ocr_text:
+                        print(f"           OCR: {e.ocr_text[:160]}")
                     if e.vlm_scores and e.vlm_scores.feedback:
                         print(f"           💬 {e.vlm_scores.feedback[:160]}")
             elif evals:

@@ -97,7 +97,9 @@ ranking:
   # DINOv2-small: appearance/identity vs product photo (better than CLIP-I for garments)
   dino: true
   dino_model: facebook/dinov2-small
-  # 2B VLM-as-judge is a future slot — noisy on Qwen2-VL-2B, keep off by default
+  # Tesseract OCR vs VLM label text (extracted_text_ocr). Needs tesseract-ocr + rus.
+  cer: true
+  ocr_lang: rus+eng
   vlm_judge: true
   vlm_gate:
     min_clip_t: 0.0
@@ -110,6 +112,7 @@ ranking:
     clip_i: 0.10
     dino_i: 0.15
     aesthetic: 0.10
-    vlm: 0.35
+    vlm: 0.30
     heuristics: 0.10
+    cer: 0.15
 

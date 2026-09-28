@@ -188,6 +188,8 @@ def load_ranking_config() -> dict:
         "clip": True,
         "aesthetic": True,
         "dino": True,
+        "cer": True,
+        "ocr_lang": "rus+eng",
         "vlm_judge": True,
         "vlm_gate": {
             "min_clip_t": 0.0,
@@ -202,8 +204,9 @@ def load_ranking_config() -> dict:
             "clip_i": 0.10,
             "dino_i": 0.15,
             "aesthetic": 0.10,
-            "vlm": 0.35,
+            "vlm": 0.30,
             "heuristics": 0.10,
+            "cer": 0.15,
         },
     }
     merged = {**defaults, **config}
