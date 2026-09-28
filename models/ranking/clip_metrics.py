@@ -88,8 +88,14 @@ def clip_alignment_text(
     if concept is not None:
         for attr in ("scene", "lighting", "style", "mood"):
             v = str(getattr(concept, attr, None) or "").strip()
-            if v:
-                bits.append(v)
+            if not v:
+                continue
+            v = " ".join(v.split())
+            for sep in (". ", "! ", "? ", "\n"):
+                if sep in v:
+                    v = v.split(sep, 1)[0]
+                    break
+            bits.append(v[:90])
     if bits:
         return ("a photograph of " + ", ".join(bits))[:240]
     skip = _CLIP_SKIP
@@ -163,25 +169,22 @@ class CLIPMetrics:
         print("   Aesthetic predictor ready")
         return mlp
 
-    def _as_embed(self, feat) -> torch.Tensor:
-        if torch.is_tensor(feat):
-            t = feat
-        else:
-            t = getattr(feat, "image_embeds", None)
-            if t is None:
-                t = getattr(feat, "text_embeds", None)
-        if t is None:
-            raise TypeError(f"CLIP returned {type(feat).__name__}, expected a tensor")
-        if t.dim() == 1:
-            t = t.unsqueeze(0)
-        return t
+    def _vision_embed(self, pixel: torch.Tensor) -> torch.Tensor:
+        vision = self.model.vision_model(pixel_values=pixel)
+        pooled = getattr(vision, "pooler_output", None)
+        if pooled is None:
+            pooled = vision.last_hidden_state[:, 0]
+        proj = self.model.visual_projection
+        pooled = pooled.to(device=proj.weight.device, dtype=proj.weight.dtype)
+        if pooled.shape[-1] == proj.weight.shape[1]:
+            pooled = proj(pooled)
+        return F.normalize(pooled.float(), dim=-1)
 
     @torch.inference_mode()
     def _image_embed(self, image: Image.Image) -> torch.Tensor:
         inputs = self.processor(images=image, return_tensors="pt")
         pixel = inputs["pixel_values"].to(self.device)
-        feat = self.model.get_image_features(pixel_values=pixel)
-        return F.normalize(self._as_embed(feat).float(), dim=-1).detach().clone()
+        return self._vision_embed(pixel).detach().clone()
 
     @torch.inference_mode()
     def score(
