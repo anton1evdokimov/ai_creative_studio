@@ -91,8 +91,19 @@ pipeline:
   # Max retries for prompt improvement (0 = disable retries on 8GB)
   # Raise together with quality_threshold once stable.
   max_retries: 3
-  # CUDA: park Qwen2.5-VL on CPU between stages (one disk load). Set false on 8GB Mac.
+  # CUDA: park VLM+LLM+diffusion on CPU (no disk reload). CLIP/DINO stay on GPU.
+  # Set false on 8GB Mac (full unload).
   keep_vlm: true
+
+video:
+  enabled: true
+  backend: kandinsky5_t2v
+  model: kandinskylab/Kandinsky-5.0-T2V-Lite-distilled16steps-10s
+  num_frames: 241
+  num_inference_steps: 16
+  guidance_scale: 1.0
+  width: 768
+  height: 512
 
 ranking:
   # CLIP-T (prompt), CLIP-I (vs product photo), LAION aesthetic on CLIP ViT-L/14

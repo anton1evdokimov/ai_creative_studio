@@ -34,9 +34,10 @@ def build_graph():
     workflow.add_edge("scoring", "refine_prompts")        # ⭐ scoring → refine → generation
     workflow.add_edge("refine_prompts", "generation")
     workflow.add_edge("generation", "evaluation")
+    workflow.add_edge("evaluation", "video_generation")
 
     workflow.add_conditional_edges(
-        "evaluation",
+        "video_generation",
         quality_router,
         {"end": END, "improve": "improve_prompt"},
     )

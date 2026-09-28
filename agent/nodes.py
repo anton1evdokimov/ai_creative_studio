@@ -1,11 +1,12 @@
 import json
+from pathlib import Path
 from typing import Any
 
 from models.diffusion.config import load_pipeline_config, load_diffusion_config, load_ranking_config
-from models.llm.factory import create_llm, unload_llm
+from models.llm.factory import create_llm, park_llm, unload_llm
 from models.llm.parser import parse_concepts, parse_concept_score
 from models.diffusion.generator import get_flux_generator, reset_flux_generator
-from models.diffusion.factory import unload_image_backend
+from models.diffusion.factory import park_image_backend, unload_image_backend, wake_image_backend
 from models.vlm.analyzer import create_product_analyzer, reset_product_analyzer
 from models.vlm.factory import park_vlm, unload_vlm
 from models.ranking.clip import create_image_scorer, reset_image_scorer
@@ -65,6 +66,9 @@ def _unload_vlm_weights():
 
 def _unload_llm_weights():
     global _llm
+    if _keep_vlm():
+        park_llm()
+        return
     _llm = None
     reset_prompt_refiner()
     unload_llm()
@@ -78,6 +82,9 @@ def _unload_clip_weights():
 
 
 def _unload_flux_weights():
+    if _keep_vlm():
+        park_image_backend()
+        return
     reset_flux_generator()
     unload_image_backend()
     _release_mlx()
@@ -293,6 +300,7 @@ def refine_prompts(state):
 
 def generate_images(state):
     print("🎨 [5/7] Generating images...")
+    wake_image_backend()
     generator = get_flux_generator()
     concepts = state.get("ranked_concepts") or state.get("creative_concepts", [])
     refined = state.get("refined_prompts") or None
@@ -440,14 +448,14 @@ def evaluate_images(state):
         })
         print(f"       pre-score={pre:.3f}")
 
-    if use_clip:
+    if use_clip and not _keep_vlm():
         _unload_clip_weights()
 
     if use_dino and rows and product_image:
         try:
-            from models.ranking.dino_metrics import DinoMetrics, unload_dino_metrics
+            from models.ranking.dino_metrics import create_dino_metrics, unload_dino_metrics
 
-            dino = DinoMetrics(rank_cfg.get("dino_model") or "facebook/dinov2-small")
+            dino = create_dino_metrics(rank_cfg.get("dino_model") or "facebook/dinov2-small")
             for r in rows:
                 s, raw = dino.similarity(r["path"], product_image)
                 r["dino_i"], r["dino_i_raw"] = s, raw
@@ -456,8 +464,9 @@ def evaluate_images(state):
                     r["clip_m"].dino_i_raw = raw
                 print(f"       {r['path'].split('/')[-1]} DINO-I={s:.2f} (cos={raw:.3f})")
                 r["pre"] = _blend(r["clip_m"], None, r["q"]["quality_factor"], s)
-            unload_dino_metrics()
-            print("   ♻️  Unloaded DINOv2")
+            if not _keep_vlm():
+                unload_dino_metrics()
+                print("   ♻️  Unloaded DINOv2")
         except Exception as exc:
             print(f"⚠️  DINOv2 skipped: {type(exc).__name__}: {exc}")
 
@@ -625,6 +634,43 @@ def quality_router(state):
 
 
 def generate_video(state):
-    print("🎬 Generating video placeholders...")
-    state["generated_videos"] = [f"{i}_video.mp4" for i in state.get("generated_images", [])]
+    from models.diffusion.config import _load_root_config
+    from models.video.i2v import generate_product_video
+
+    vcfg = _load_root_config().get("video") or {}
+    if not bool(vcfg.get("enabled", True)):
+        print("🎬 [video] skipped (video.enabled: false)")
+        return state
+    src = state.get("best_image") or (state.get("generated_images") or [None])[0]
+    if not src:
+        print("🎬 [video] no still to animate")
+        return state
+    prompt = ""
+    for gr in state.get("generation_results") or []:
+        if getattr(gr, "image_path", None) == src:
+            prompt = getattr(gr, "prompt", "") or ""
+            break
+    if not prompt:
+        rc = state.get("ranked_concepts") or []
+        if rc:
+            prompt = f"{getattr(rc[0], 'scene', '')} {getattr(rc[0], 'lighting', '')}".strip()
+    out_dir = Path(load_diffusion_config()["output_dir"])
+    dest = out_dir / f"{Path(src).stem}_t2v"
+    backend = str(vcfg.get("backend") or "kandinsky5_t2v")
+    print(f"🎬 [video] T2V backend={backend}  prompt={prompt[:100]!r}")
+    park_image_backend()
+    path = generate_product_video(
+        src,
+        dest,
+        backend=backend,
+        prompt=prompt,
+        model_id=str(vcfg.get("model") or ""),
+        num_frames=int(vcfg.get("num_frames") or 241),
+        num_inference_steps=int(vcfg.get("num_inference_steps") or 16),
+        guidance_scale=float(vcfg.get("guidance_scale") or 1.0),
+        width=int(vcfg.get("width") or 768),
+        height=int(vcfg.get("height") or 512),
+    )
+    state["generated_videos"] = [path]
+    print(f"   → {path}")
     return state

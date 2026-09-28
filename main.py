@@ -175,6 +175,12 @@ def main() -> int:
         else:
             print("\n⚠️  No images were generated.")
 
+        videos = result.get("generated_videos") or []
+        if videos:
+            print("\n🎬 I2V")
+            for p in videos:
+                print(f"  • {p}")
+
         # ------------------------------------------------------------------
         # STAGE 6: Evaluation (VLM 6D + heuristics)
         # ------------------------------------------------------------------

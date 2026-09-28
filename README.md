@@ -15,8 +15,9 @@ flowchart TD
   S --> R[refine_prompts]
   R --> G[generation]
   G --> E[evaluation]
-  E -->|best >= quality_threshold or no retries| END[END]
-  E -->|best < threshold| I[improve_prompt]
+  E --> V[video I2V]
+  V -->|best >= quality_threshold or no retries| END[END]
+  V -->|best < threshold| I[improve_prompt]
   I --> R
 ```
 
@@ -28,9 +29,8 @@ flowchart TD
 | 4 | `refine_prompts` | LLM writes diffusion `positive_prompt` / `negative_prompt` | **LLM** |
 | 5 | `generation` | Draw frames from refined prompts + product photo | **Diffusion** (not LLM/VLM) |
 | 6 | `evaluation` | Metrics on PNGs; pick `best_image` | CLIP, DINO, Tesseract, optional **VLM-judge** |
+| 6b | `video_generation` | T2V from the winner’s prompt (K5 Lite 10s) | **Kandinsky5T2V** |
 | 7 | `quality_router` | If `best.score < quality_threshold` and retries left → `improve_prompt` then refine again | **LLM** on improve |
-
-`generate_video` exists in the graph as a stub (placeholder paths), not a real video model.
 
 On **CUDA**, `pipeline.keep_vlm: true` parks Qwen2.5-VL on CPU between stages (one disk load). On **Mac**, VLM is fully unloaded so the LLM/diffusion can use unified RAM.
 
@@ -112,3 +112,60 @@ python -m uvicorn serve:app --host 0.0.0.0 --port 8080
 ```
 
 CUDA Docker: see `Dockerfile` / `compose.cuda.yaml`. Outputs: `generated/`. Hugging Face cache: `HF_HOME` (e.g. `/mnt/evo4tb/evdokimov/.hf_cache`).
+
+---
+
+## Backend eval harness
+
+Same packshot + prompt through Kandinsky 5 I2I, FLUX.2 Klein, and SDXL inpaint. One row per backend in `generated/eval_backends/metrics.csv`:
+
+| Column | What it is |
+| --- | --- |
+| `seconds` | Wall time of **generation only** (includes model load if cold). |
+| `peak_vram_gb` | `torch.cuda.max_memory_allocated` after that backend. |
+| `clip_t` | CLIPScore-style prompt match (0–1), same formula as stage 6. |
+| `clip_i` | Packshot identity `(cos+1)/2`. |
+| `dino_i` | DINOv2 identity vs packshot. |
+| `cer` | Character error vs filename stem as weak label (harness has no VLM OCR). Lower is better. |
+| `error` | Empty if the run succeeded. |
+
+```bash
+python scripts/eval_backends.py --image data/input/product.jpg \
+  --prompt "kefir bottle on a rustic wooden table, morning light" \
+  --out_dir generated/eval_backends
+```
+
+Hypothesis to log: K5 wins CLIP-I/CER, Klein wins scene (`clip_t` vs a scenic prompt), inpaint locks packshot pixels.
+
+---
+
+## Video (Kandinsky 5 T2V)
+
+After stills are ranked, the **winner’s diffusion prompt** (not the pixels) goes to **Kandinsky 5.0 T2V Lite** distilled 16-step 10s (`kandinskylab/Kandinsky-5.0-T2V-Lite-distilled16steps-10s`, Diffusers fallback `…-Diffusers`). `guidance_scale=1.0`, 241 frames @ 24 fps ≈ 10 s. **Text-to-video**, not img2vid. If T2V fails, Ken Burns GIF.
+
+`config.yaml` → `video.backend: kandinsky5_t2v`. Disable: `video.enabled: false`.
+
+---
+
+## LoRA + hold-out
+
+Train SDXL UNet LoRA on **seen** SKUs; CLIP-I vs **unseen** photos in `--holdout_data_dir` (same category, different product). If train CLIP-I rises and hold-out does not, the adapter memorized SKUs, not “follow the product”.
+
+```bash
+# put train SKUs in data/lora/train, hold-out SKUs in data/lora/holdout
+python scripts/train_sdxl_lora.py \
+  --instance_data_dir data/lora/train \
+  --holdout_data_dir data/lora/holdout \
+  --instance_prompt "a photo of a product bottle" \
+  --output_dir lora/ref_follow \
+  --max_train_steps 500 --eval_every 100
+```
+
+`metrics.csv` column `clip_i_holdout`. Then `diffusion.lora.path: lora/ref_follow` with `enabled: true` (SDXL backend, not Klein).
+
+---
+
+## Async GPU jobs
+
+`POST /jobs` (multipart `image`, `description`) returns `202 {"job_id"}` immediately. One GPU lock in `serve_jobs.py`. Poll `GET /jobs/{id}` until `status` is `done` or `error`. UI on `/` does this automatically. `POST /generate` enqueues the same way (no 20‑minute HTTP hold).
+

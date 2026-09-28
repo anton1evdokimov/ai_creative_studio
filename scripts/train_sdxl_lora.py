@@ -20,7 +20,7 @@ Example:
       --max_train_steps 500 --rank 8 --resolution 512 \\
       --eval_every 100
 
-Watch CLIP-T / CLIP-I in output_dir/metrics.csv (not train MSE) to pick a checkpoint.
+Watch CLIP-T / CLIP-I / clip_i_holdout in output_dir/metrics.csv (not train MSE) to pick a checkpoint.
 Optional: --eval_vlm (heavy, skip on 8GB) and --eval_ocr (needs pytesseract + tesseract).
 """
 from __future__ import annotations
@@ -136,7 +136,7 @@ def parse_args():
     p.add_argument("--eval_guidance", type=float, default=5.0)
     p.add_argument("--eval_vlm", action="store_true", help="Also run VLM-as-judge (heavy)")
     p.add_argument("--eval_ocr", action="store_true", help="OCR generated image (pytesseract)")
-    p.add_argument("--ocr_terms", default="", help="Comma-separated words that should appear on the product")
+    p.add_argument("--holdout_data_dir", default="", help="Unseen SKU photos for CLIP-I hold-out (not used in train)")
     return p.parse_args()
 
 
@@ -147,6 +147,7 @@ METRICS_FIELDS = [
     "clip_t_raw",
     "clip_i",
     "clip_i_raw",
+    "clip_i_holdout",
     "dino_i",
     "dino_i_raw",
     "aesthetic",
@@ -228,6 +229,10 @@ def run_eval(
     prompt = (args.eval_prompt or args.instance_prompt).strip()
     terms = _ocr_terms(args)
     refs = train_image_paths[:4]
+    hold_dir = Path(args.holdout_data_dir) if args.holdout_data_dir else None
+    hold_refs = []
+    if hold_dir and hold_dir.is_dir():
+        hold_refs = sorted(p for p in hold_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTS)[:8]
 
     scheduler = EulerDiscreteScheduler.from_pretrained(pretrained, subfolder="scheduler")
     pipe = StableDiffusionXLPipeline(
@@ -289,6 +294,7 @@ def run_eval(
 
     clip_ts, clip_is, aesths, vlm_over, ocr_hits = [], [], [], [], []
     clip_t_raws, clip_i_raws = [], []
+    clip_i_hold = []
     dino_is, dino_raws = [], []
     last_ocr = ""
     for img_path, image in saved:
@@ -309,6 +315,13 @@ def run_eval(
                     clip_is.append(sum(i_vals) / len(i_vals))
                 if i_raws:
                     clip_i_raws.append(sum(i_raws) / len(i_raws))
+                h_vals = []
+                for ref in hold_refs:
+                    m = clipper.score(img_path, prompt, product_image_path=ref)
+                    if m.clip_i is not None:
+                        h_vals.append(m.clip_i)
+                if h_vals:
+                    clip_i_hold.append(sum(h_vals) / len(h_vals))
             except Exception as exc:
                 clip_error = f"{type(exc).__name__}: {exc}"
                 print(f"⚠️  CLIP score failed on {img_path.name}: {clip_error}")
@@ -322,7 +335,8 @@ def run_eval(
             f"   eval {img_path.name}: "
             f"CLIP-T={clip_ts[-1] if clip_ts else '—'} "
             f"(raw={clip_t_raws[-1] if clip_t_raws else '—'}) "
-            f"CLIP-I={round(clip_is[-1], 4) if clip_is else '—'}"
+            f"CLIP-I={round(clip_is[-1], 4) if clip_is else '—'} "
+            f"holdout={round(clip_i_hold[-1], 4) if clip_i_hold else '—'}"
         )
 
     try:
@@ -361,6 +375,7 @@ def run_eval(
         "clip_t_raw": round(sum(clip_t_raws) / len(clip_t_raws), 4) if clip_t_raws else "",
         "clip_i": round(sum(clip_is) / len(clip_is), 4) if clip_is else "",
         "clip_i_raw": round(sum(clip_i_raws) / len(clip_i_raws), 4) if clip_i_raws else "",
+        "clip_i_holdout": round(sum(clip_i_hold) / len(clip_i_hold), 4) if clip_i_hold else "",
         "dino_i": round(sum(dino_is) / len(dino_is), 4) if dino_is else "",
         "dino_i_raw": round(sum(dino_raws) / len(dino_raws), 4) if dino_raws else "",
         "aesthetic": round(sum(aesths) / len(aesths), 4) if aesths else "",

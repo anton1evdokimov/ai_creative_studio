@@ -61,6 +61,11 @@ def create_llm():
     )
 
 
+def park_llm() -> None:
+    if _llm_instance is not None and hasattr(_llm_instance, "park"):
+        _llm_instance.park()
+
+
 def unload_llm():
     """Drop the shared LLM so FLUX can use unified RAM."""
     global _llm_instance

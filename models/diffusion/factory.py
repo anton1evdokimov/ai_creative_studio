@@ -83,6 +83,48 @@ def create_image_backend():
     )
 
 
+def park_image_backend() -> None:
+    global _backend
+    if _backend is None or getattr(_backend, "_parked", False):
+        return
+    pipe = getattr(_backend, "pipe", None) or getattr(_backend, "model", None)
+    if pipe is None:
+        return
+    print("   ♻️  Parking diffusion on CPU (no reload from disk)")
+    try:
+        import torch
+
+        pipe.to("cpu")
+        _backend._parked = True
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception as exc:
+        print(f"⚠️  Diffusion park skipped ({type(exc).__name__}: {exc})")
+
+
+def wake_image_backend() -> None:
+    global _backend
+    if _backend is None or not getattr(_backend, "_parked", False):
+        return
+    pipe = getattr(_backend, "pipe", None) or getattr(_backend, "model", None)
+    if pipe is None:
+        return
+    print("   🎨 Waking diffusion on CUDA")
+    try:
+        import torch
+
+        if torch.cuda.is_available() and hasattr(pipe, "enable_model_cpu_offload"):
+            try:
+                pipe.enable_model_cpu_offload()
+            except Exception:
+                pipe.to("cuda")
+        elif torch.cuda.is_available():
+            pipe.to("cuda")
+        _backend._parked = False
+    except Exception as exc:
+        print(f"⚠️  Diffusion wake failed ({type(exc).__name__}: {exc})")
+
+
 def unload_image_backend():
     """Drop FLUX weights after generation so VLM scoring can reload."""
     global _backend
