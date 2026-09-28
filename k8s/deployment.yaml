@@ -42,8 +42,8 @@ spec:
                   optional: true
           resources:
             requests:
-              cpu: "4"
-              memory: 16Gi
+              cpu: "500m"
+              memory: 2Gi
               nvidia.com/gpu: "1"
             limits:
               cpu: "16"
