@@ -3,11 +3,9 @@ kind: Kustomization
 namespace: ai-creative-studio
 resources:
   - namespace.yaml
-  - pvc.yaml
   - secret.yaml
   - deployment.yaml
   - service.yaml
-  - ingress.yaml
 configMapGenerator:
   - name: studio-config
     files:

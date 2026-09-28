@@ -12,8 +12,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from agent.graph import build_graph
+from models.media import ingest_image_bytes
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 INPUT_DIR = Path(os.environ.get("AICS_INPUT_DIR", "/data/input"))
 OUTPUT_ROOT = Path(os.environ.get("AICS_OUTPUT_DIR", "/app/generated"))
 
@@ -39,7 +39,7 @@ button:disabled{opacity:.5}
 <div class="card">
 <form id="f" action="/generate" method="post" enctype="multipart/form-data">
 <label>Фото продукта</label>
-<input type="file" name="image" accept="image/jpeg,image/png,image/webp" required>
+<input type="file" name="image" accept="image/*" required>
 <label>Описание (необязательно)</label>
 <input type="text" name="description" placeholder="кефир, худи, сыворотка…">
 <button type="submit">Сгенерировать</button>
@@ -125,15 +125,15 @@ async def generate(
     image: UploadFile = File(...),
     description: str = Form(""),
 ):
-    suffix = Path(image.filename or "product.png").suffix.lower()
-    if suffix not in IMAGE_EXTS:
-        raise HTTPException(400, f"Need jpg/png/webp, got {suffix or 'no extension'}")
     if _graph is None:
         raise HTTPException(503, "Graph not ready")
 
     job = uuid.uuid4().hex[:12]
-    dest = INPUT_DIR / f"{job}{suffix}"
-    dest.write_bytes(await image.read())
+    dest = INPUT_DIR / job
+    try:
+        dest = ingest_image_bytes(await image.read(), image.filename or "product.png", dest)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     with _lock:
         result = _graph.invoke(

@@ -178,9 +178,7 @@ class Kandinsky5Backend(ImageBackend):
         if not ref or not Path(ref).is_file():
             raise FileNotFoundError("Kandinsky 5 I2I needs a product photo (same --image as the pipeline).")
 
-        w = int(k5.get("width") or self.config.get("width") or 1280)
-        h = int(k5.get("height") or self.config.get("height") or 768)
-        w, h = _snap_hw(w, h)
+        w, h = _snap_hw(*Image.open(ref).size)
         image = _letterbox(Image.open(ref).convert("RGB"), w, h)
 
         generator = None
@@ -215,7 +213,9 @@ class Kandinsky5Backend(ImageBackend):
         print(f"   Kandinsky5 I2I  {Path(ref).name}  {w}x{h}  steps={kwargs['num_inference_steps']}")
 
         out = self.pipe(**kwargs)
+        from models.media import save_rgb
+
         pil = _to_pil(out)
-        pil.save(output_path)
+        save_rgb(pil, output_path)
         torch.cuda.empty_cache()
         return output_path

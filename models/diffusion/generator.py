@@ -9,6 +9,7 @@ from .factory import create_image_backend
 
 
 from models.product_kind import ensure_product_lead, looks_like_apparel, product_noun
+from models.media import output_ext_for
 
 
 def concept_to_prompt(
@@ -126,7 +127,7 @@ class FluxGenerator:
 
             slug = concept.name.lower().replace(" ", "_") or f"concept_{index}"
             slug = "".join(ch for ch in slug if ch.isalnum() or ch in "_-")[:60] or f"concept_{index}"
-            output_path = str(output_dir / f"{index:02d}_{slug}.png")
+            output_path = str(output_dir / f"{index:02d}_{slug}{output_ext_for(product_image)}")
 
             print(f"🎨 Generating [{index+1}/{len(concepts)}]: {concept.name}")
             if rp is not None:

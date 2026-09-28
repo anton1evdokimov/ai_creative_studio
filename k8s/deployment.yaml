@@ -15,12 +15,11 @@ spec:
         app: studio
     spec:
       restartPolicy: Always
-      # runtimeClassName: nvidia
       terminationGracePeriodSeconds: 60
       containers:
         - name: studio
           image: ai-creative-studio:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
               name: http
@@ -43,8 +42,8 @@ spec:
                   optional: true
           resources:
             requests:
-              cpu: "8"
-              memory: 80Gi
+              cpu: "4"
+              memory: 16Gi
               nvidia.com/gpu: "1"
             limits:
               cpu: "16"
@@ -81,8 +80,9 @@ spec:
             path: /mnt/evo4tb/evdokimov/.hf_cache
             type: Directory
         - name: studio-data
-          persistentVolumeClaim:
-            claimName: studio-data
+          hostPath:
+            path: /mnt/evo4tb/evdokimov/ai_creative_studio/k8s-data
+            type: DirectoryOrCreate
         - name: config
           configMap:
             name: studio-config

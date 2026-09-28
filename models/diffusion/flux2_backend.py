@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 
 from .base import ImageBackend
-from .kandinsky_backend import _TEXT_NEG, _compact_k5_prompt, _label_block, _letterbox
+from .kandinsky_backend import _TEXT_NEG, _compact_k5_prompt, _label_block, _letterbox, _snap_hw
 
 
 FLUX2_DEFAULT = "black-forest-labs/FLUX.2-klein-4B"
@@ -64,8 +64,7 @@ class Flux2Backend(ImageBackend):
         if not ref or not Path(ref).is_file():
             raise FileNotFoundError("FLUX.2 needs a product photo (same --image as the pipeline).")
 
-        w = int(f2.get("width") or 768)
-        h = int(f2.get("height") or 1280)
+        w, h = _snap_hw(*Image.open(ref).size)
         image = _letterbox(Image.open(ref).convert("RGB"), w, h)
 
         prompt = _compact_k5_prompt(prompt, max_chars=400)
@@ -99,7 +98,9 @@ class Flux2Backend(ImageBackend):
             kwargs.pop("image", None)
             print("⚠️  This FLUX.2 build ignores image= — T2I only")
             out = self.pipe(**kwargs)
+        from models.media import save_rgb
+
         pil = out.images[0]
-        pil.save(output_path)
+        save_rgb(pil, output_path)
         torch.cuda.empty_cache()
         return output_path
