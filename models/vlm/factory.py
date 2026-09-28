@@ -64,6 +64,11 @@ def create_vlm():
     )
 
 
+def park_vlm() -> None:
+    if _vlm_instance is not None and hasattr(_vlm_instance, "park"):
+        _vlm_instance.park()
+
+
 def unload_vlm():
     """Drop the shared VLM so diffusion can use VRAM."""
     global _vlm_instance

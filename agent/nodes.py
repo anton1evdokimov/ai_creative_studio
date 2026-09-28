@@ -7,7 +7,7 @@ from models.llm.parser import parse_concepts, parse_concept_score
 from models.diffusion.generator import get_flux_generator, reset_flux_generator
 from models.diffusion.factory import unload_image_backend
 from models.vlm.analyzer import create_product_analyzer, reset_product_analyzer
-from models.vlm.factory import unload_vlm
+from models.vlm.factory import park_vlm, unload_vlm
 from models.ranking.clip import create_image_scorer, reset_image_scorer
 from models.ranking.clip_metrics import create_clip_metrics, unload_clip_metrics
 from models.ranking.quality import analyze_quality
@@ -37,7 +37,25 @@ def _release_mlx():
         pass
 
 
+def _keep_vlm() -> bool:
+    """Resident VLM only on CUDA. Mac still fully unloads for unified RAM."""
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+    except Exception:
+        return False
+    cfg = load_pipeline_config()
+    if "keep_vlm" in cfg:
+        return bool(cfg["keep_vlm"])
+    return True
+
+
 def _unload_vlm_weights():
+    if _keep_vlm():
+        park_vlm()
+        return
     reset_product_analyzer()
     reset_image_scorer()
     unload_vlm()

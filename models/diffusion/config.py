@@ -103,6 +103,16 @@ def load_diffusion_config() -> dict:
             "height": 1280,
             "image": "",
         },
+        "inpaint": {
+            "enabled": False,
+            "model": "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+            "strength": 0.92,
+            "mask_dilate": 8,
+            "white_thr": 238,
+            "long_side": 1024,
+            "save_mask": True,
+            "image": "",
+        },
     }
 
     merged = {**defaults, **config}
@@ -142,6 +152,9 @@ def load_diffusion_config() -> dict:
     f2_defaults = defaults["flux2"]
     f2_src = config.get("flux2") if isinstance(config.get("flux2"), dict) else {}
     merged["flux2"] = {**f2_defaults, **f2_src}
+    ip_defaults = defaults["inpaint"]
+    ip_src = config.get("inpaint") if isinstance(config.get("inpaint"), dict) else {}
+    merged["inpaint"] = {**ip_defaults, **ip_src}
     merged["backend"] = str(config.get("backend") or merged.get("backend") or "sdxl").lower()
     # Make output_dir absolute if relative
     out = Path(merged["output_dir"])
@@ -225,6 +238,7 @@ def load_pipeline_config() -> dict:
         "top_k_concepts": 2,
         "quality_threshold": 0.0,
         "max_retries": 0,
+        "keep_vlm": True,
     }
     return {**defaults, **config}
 

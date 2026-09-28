@@ -17,6 +17,7 @@ class CUDAVLMBackend:
         self._model = None
         self._processor = None
         self._boot_time = None
+        self._parked = False
 
     def _ensure_loaded(self) -> None:
         if self._model is not None:
@@ -46,7 +47,32 @@ class CUDAVLMBackend:
                 self.model_name, trust_remote_code=True
             )
         self._boot_time = time.time() - t0
+        self._parked = False
         print(f"   ✅ VLM loaded in {self._boot_time:,.1f}s")
+
+    def park(self) -> None:
+        """Keep weights in RAM, free GPU for LLM / diffusion."""
+        if self._model is None or self._parked:
+            return
+        print("   ♻️  Parking VLM on CPU (no reload from disk)")
+        try:
+            self._model.to("cpu")
+            self._parked = True
+        except Exception as exc:
+            print(f"⚠️  VLM park skipped ({type(exc).__name__}: {exc})")
+            return
+        torch.cuda.empty_cache()
+
+    def wake(self) -> None:
+        self._ensure_loaded()
+        if not self._parked or self._model is None:
+            return
+        print("   👁️  Waking VLM on CUDA")
+        try:
+            self._model.to(device="cuda", dtype=torch.bfloat16)
+            self._parked = False
+        except Exception as exc:
+            print(f"⚠️  VLM wake failed ({type(exc).__name__}: {exc}) — leaving as-is")
 
     def chat_with_image(
         self,
@@ -59,6 +85,8 @@ class CUDAVLMBackend:
         temperature: Optional[float] = None,
     ) -> str:
         self._ensure_loaded()
+        if hasattr(self, "wake"):
+            self.wake()
         p = Path(image_path)
         if not p.exists():
             raise FileNotFoundError(f"VLM input image not found: {p}")

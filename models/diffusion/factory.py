@@ -32,6 +32,13 @@ def create_image_backend():
         _backend = MockImageBackend(config)
         return _backend
 
+    if inpaint_on := str(config.get("backend") or "").lower() in {"sdxl_inpaint", "inpaint"}:
+        print("🚀 Using SDXL inpaint backend")
+        from .sdxl_inpaint_backend import SDXLInpaintBackend
+
+        _backend = SDXLInpaintBackend(config)
+        return _backend
+
     if is_flux2_model(str(config.get("model") or ""), str(config.get("backend") or "")):
         print("🚀 Using FLUX.2 backend")
         from .flux2_backend import Flux2Backend

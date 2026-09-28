@@ -23,18 +23,13 @@ vlm:
   max_tokens: 1200
 
 diffusion:
-  # sdxl | kandinsky5 | flux2 — same LangGraph input (product photo + LLM prompts).
-  # sdxl: ControlNet / IP-Adapter. kandinsky5: I2I. flux2: Klein reference image=.
-  backend: flux2
-  # Default: SDXL-Turbo (~7GB download, 4 steps). FLUX.1-schnell is ~20GB+ and too heavy on disk.
-  # Options: sdxl-turbo | sdxl | schnell | dev | kandinsky5 | flux2
-  model: flux2
-  quantize: 4
-  # Turbo is trained at 512; 768+ needs more RAM. Full SDXL can use 768 on 8GB.
-  width: 512
-  height: 512
-  num_inference_steps: 4
-  guidance_scale: 0.0
+  # sdxl | sdxl_inpaint | kandinsky5 | flux2
+  backend: sdxl_inpaint
+  model: sdxl
+  width: 768
+  height: 1280
+  num_inference_steps: 20
+  guidance_scale: 5.5
   output_dir: generated
   # LoRA is off until you train weights and set enabled: true
   lora:
@@ -45,7 +40,7 @@ diffusion:
   # Canny = product silhouette (geometry). OpenPose+Depth = clothing pose (set modes back).
   # Canny reads the product photo, not pose_ref.
   controlnet:
-    enabled: true
+    enabled: false
     modes: [canny]
     canny_scale: 0.5
     canny_low: 60
@@ -57,7 +52,7 @@ diffusion:
     canny_image: ""
     canny_align: left                         # left | center | right — bottle on landscape
   ip_adapter:
-    enabled: true
+    enabled: false
     scale: 0.5
     image: ""
     pad_square: true
@@ -76,6 +71,13 @@ diffusion:
     guidance_scale: 1.0
     width: 768
     height: 1280
+  inpaint:
+    model: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    strength: 0.92
+    mask_dilate: 8
+    white_thr: 238
+    long_side: 1024
+    save_mask: true
 
 pipeline:
   # How many concepts to generate from LLM
@@ -89,6 +91,8 @@ pipeline:
   # Max retries for prompt improvement (0 = disable retries on 8GB)
   # Raise together with quality_threshold once stable.
   max_retries: 3
+  # CUDA: park Qwen2.5-VL on CPU between stages (one disk load). Set false on 8GB Mac.
+  keep_vlm: true
 
 ranking:
   # CLIP-T (prompt), CLIP-I (vs product photo), LAION aesthetic on CLIP ViT-L/14
