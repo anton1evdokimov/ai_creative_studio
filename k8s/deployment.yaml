@@ -44,9 +44,11 @@ spec:
             requests:
               cpu: "500m"
               memory: 2Gi
+              nvidia.com/gpu: "1"
             limits:
               cpu: "16"
               memory: 80Gi
+              nvidia.com/gpu: "1"
           volumeMounts:
             - name: hf-cache
               mountPath: /models/hf
