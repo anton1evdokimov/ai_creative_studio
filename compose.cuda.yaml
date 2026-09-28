@@ -10,6 +10,8 @@ services:
       HUGGINGFACE_HUB_CACHE: /models/hf/hub
       TRANSFORMERS_CACHE: /models/hf/hub
       HF_TOKEN: ${HF_TOKEN:-}
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+      TOKENIZERS_PARALLELISM: "false"
     volumes:
       - /mnt/evo4tb/evdokimov/.hf_cache:/models/hf
       - ./config.yaml:/app/config.yaml:ro

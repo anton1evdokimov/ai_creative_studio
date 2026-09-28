@@ -91,9 +91,10 @@ pipeline:
   # Max retries for prompt improvement (0 = disable retries on 8GB)
   # Raise together with quality_threshold once stable.
   max_retries: 3
-  # CUDA: park VLM+LLM+diffusion on CPU (no disk reload). CLIP/DINO stay on GPU.
-  # Set false on 8GB Mac (full unload).
+  # Full unload between stages (required in Docker: VLM+LLM park ≈ 120GB RAM → OOM).
+  # park_to_cpu: true only on a host with plenty of RAM, not in a memory-capped container.
   keep_vlm: true
+  park_to_cpu: false
 
 video:
   enabled: true

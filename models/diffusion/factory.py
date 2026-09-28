@@ -134,3 +134,6 @@ def unload_image_backend():
         if hasattr(_backend, attr):
             setattr(_backend, attr, None)
     _backend = None
+    from models.mem import release_cuda
+
+    release_cuda()

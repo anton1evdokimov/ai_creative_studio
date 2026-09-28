@@ -20,12 +20,13 @@ def get_job(jid: str) -> dict[str, Any] | None:
     return _jobs.get(jid)
 
 
-def attach_job_inputs(jid: str, image_path: str, description: str) -> None:
+def attach_job_inputs(jid: str, image_path: str, description: str, scene: str = "") -> None:
     job = _jobs.get(jid)
     if job is None:
         return
     job["image_path"] = image_path
     job["description"] = description
+    job["scene"] = scene
 
 
 def run_exclusive(jid: str, fn: Callable[[], dict]) -> None:

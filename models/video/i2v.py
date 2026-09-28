@@ -63,7 +63,9 @@ def kandinsky_t2v_mp4(
     if pipe is None:
         raise RuntimeError(last)
     if torch.cuda.is_available():
-        if hasattr(pipe, "enable_model_cpu_offload"):
+        if hasattr(pipe, "enable_sequential_cpu_offload"):
+            pipe.enable_sequential_cpu_offload()
+        elif hasattr(pipe, "enable_model_cpu_offload"):
             pipe.enable_model_cpu_offload()
         else:
             pipe.to("cuda")

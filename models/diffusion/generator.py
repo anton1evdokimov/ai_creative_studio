@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+import json
 
 from schemas.creative import CreativeConcept
 from schemas.generation import ImageGenerationResult, RefinedPrompt
@@ -106,14 +107,23 @@ class FluxGenerator:
             rp = self._find_refined(index, concept, refined_prompts)
             if rp is not None:
                 prompt = rp.positive_prompt
+                pjson = dict(rp.prompt_json or {})
                 if rp.style_boost_tags:
-                    # append, de-dupe but keep order
                     seen = set(prompt.lower().split(", "))
                     extras = ", ".join(t for t in rp.style_boost_tags if t.lower() not in seen)
                     if extras:
                         prompt = prompt.rstrip().rstrip(",") + ", " + extras
+                    pjson["style_boost_tags"] = list(rp.style_boost_tags)
             else:
                 prompt = concept_to_prompt(concept, product_description, product_analysis)
+                pjson = {
+                    "product": product_noun(product_analysis, product_description, product_image),
+                    "scene": concept.scene,
+                    "lighting": concept.lighting,
+                    "camera": concept.camera_angle or "",
+                    "style": concept.style,
+                    "mood": concept.mood or "",
+                }
 
             noun = product_noun(product_analysis, product_description, product_image)
             prompt = ensure_product_lead(prompt, noun)
@@ -130,6 +140,7 @@ class FluxGenerator:
             output_path = str(output_dir / f"{index:02d}_{slug}{output_ext_for(product_image)}")
 
             print(f"🎨 Generating [{index+1}/{len(concepts)}]: {concept.name}")
+            print(f"   prompt JSON: {json.dumps(pjson, ensure_ascii=False)[:300]}")
             if rp is not None:
                 print(f"   (Refined prompt, length {len(prompt)})")
                 print(f"   Preview: {prompt[:120]}…")
@@ -153,6 +164,7 @@ class FluxGenerator:
                 ImageGenerationResult(
                     image_path=image_path,
                     prompt=prompt,
+                    prompt_json=pjson,
                     refined_prompt=rp,
                     model=str(self.config["model"]),
                     seed=index,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import json
 import os
 import threading
 import uuid
@@ -13,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from agent.graph import build_graph
 from models.media import ingest_image_bytes
+from models.prompt_spec import parse_scene_prompt
 from serve_jobs import attach_job_inputs, create_job, get_job, run_exclusive
 
 INPUT_DIR = Path(os.environ.get("AICS_INPUT_DIR", "/data/input"))
@@ -41,11 +43,13 @@ button:disabled{opacity:.5}
 <form id="f" action="/generate" method="post" enctype="multipart/form-data">
 <label>Фото продукта</label>
 <input type="file" name="image" accept="image/*" required>
-<label>Описание (необязательно)</label>
+<label>Описание продукта (необязательно)</label>
 <input type="text" name="description" placeholder="кефир, худи, сыворотка…">
+<label>Промпт сцены (JSON или текст)</label>
+<textarea name="scene" rows="8" placeholder='{"scene":"rustic wooden table, morning light","lighting":"soft window light from the left","mood":"warm"}'></textarea>
 <button type="submit" id="go">Сгенерировать</button>
 <button type="button" id="restart" class="secondary">Перезапустить генерацию</button>
-<p class="hint">Запрос уходит в очередь на GPU. Страница сама обновится, когда job станет done (5–20 мин). Перезапуск ставит новый job с теми же фото и описанием.</p>
+<p class="hint">Сцена: JSON с полями scene, lighting, camera, style, mood — или одна строка. Запрос в очередь GPU. Перезапуск — те же фото, описание и сцена.</p>
 </form>
 </div>
 <script>
@@ -110,6 +114,11 @@ def _result_html(payload: dict) -> str:
     for v in vids:
         href = html.escape(_file_url(v))
         vhtml += f'<p>Видео: <a href="{href}">{html.escape(Path(v).name)}</a></p>'
+    prompts = payload.get("prompts") or []
+    phtml = ""
+    if prompts:
+        blob = html.escape(json.dumps(prompts, ensure_ascii=False, indent=2))
+        phtml = f"<h2>Промпты (JSON)</h2><pre style=\"overflow:auto;background:#111;border:1px solid #333;padding:1rem;border-radius:8px;font-size:.8rem\">{blob}</pre>"
     jid = html.escape(str(payload.get("job") or ""))
     return f"""<!DOCTYPE html>
 <html lang="ru"><head>
@@ -131,6 +140,7 @@ button:disabled{{opacity:.5}}
 <a href="/generate"><button type="button" class="secondary">Другое фото</button></a>
 {best_block}
 {vhtml}
+{phtml}
 {''.join(cards) or '<p>Нет оценок.</p>'}
 <script>
 const restart = document.getElementById("restart");
@@ -180,11 +190,21 @@ def healthz() -> dict:
 
 def _payload(result: dict, job_id: str) -> dict:
     evals = result.get("evaluation_typed") or []
+    prompts = []
+    for gr in result.get("generation_results") or []:
+        prompts.append(
+            {
+                "path": getattr(gr, "image_path", None),
+                "prompt": getattr(gr, "prompt_json", None) or {},
+            }
+        )
     return {
         "job": job_id,
         "best_image": result.get("best_image"),
         "generated_images": result.get("generated_images") or [],
         "generated_videos": result.get("generated_videos") or [],
+        "scene_spec": result.get("scene_spec") or {},
+        "prompts": prompts,
         "scores": [
             {
                 "path": e.image_path,
@@ -201,13 +221,16 @@ def _payload(result: dict, job_id: str) -> dict:
     }
 
 
-def _run_graph(image_path: str, description: str) -> dict:
+def _run_graph(image_path: str, description: str, scene: str = "") -> dict:
     if _graph is None:
         raise RuntimeError("Graph not ready")
+    spec = parse_scene_prompt(scene)
     result = _graph.invoke(
         {
             "product_image": image_path,
             "product_description": description,
+            "scene_prompt": scene,
+            "scene_spec": spec,
             "retry_count": 0,
         }
     )
@@ -218,6 +241,7 @@ def _run_graph(image_path: str, description: str) -> dict:
 async def create_pipeline_job(
     image: UploadFile = File(...),
     description: str = Form(""),
+    scene: str = Form(""),
 ):
     if _graph is None:
         raise HTTPException(503, "Graph not ready")
@@ -228,11 +252,12 @@ async def create_pipeline_job(
         raise HTTPException(400, str(exc)) from exc
     jid = create_job()
     desc = description
+    scene_txt = scene
     path = str(dest)
-    attach_job_inputs(jid, path, desc)
+    attach_job_inputs(jid, path, desc, scene_txt)
 
     def work():
-        return _payload(_run_graph(path, desc), jid)
+        return _payload(_run_graph(path, desc, scene_txt), jid)
 
     threading.Thread(target=lambda: run_exclusive(jid, work), daemon=True).start()
     return JSONResponse({"job_id": jid, "status": "queued"}, status_code=202)
@@ -258,13 +283,14 @@ def rerun_job(jid: str):
         raise HTTPException(404, "unknown job")
     path = str(old["image_path"])
     desc = str(old.get("description") or "")
+    scene_txt = str(old.get("scene") or "")
     if not Path(path).is_file():
         raise HTTPException(400, "source image no longer on disk")
     new_id = create_job()
-    attach_job_inputs(new_id, path, desc)
+    attach_job_inputs(new_id, path, desc, scene_txt)
 
     def work():
-        return _payload(_run_graph(path, desc), new_id)
+        return _payload(_run_graph(path, desc, scene_txt), new_id)
 
     threading.Thread(target=lambda: run_exclusive(new_id, work), daemon=True).start()
     return JSONResponse({"job_id": new_id, "status": "queued"}, status_code=202)
@@ -275,9 +301,10 @@ async def generate(
     request: Request,
     image: UploadFile = File(...),
     description: str = Form(""),
+    scene: str = Form(""),
 ):
     """Enqueue on GPU (same as POST /jobs). Sync wait is not used — one GPU lock is inside the worker."""
-    return await create_pipeline_job(image=image, description=description)
+    return await create_pipeline_job(image=image, description=description, scene=scene)
 
 
 @app.get("/files")

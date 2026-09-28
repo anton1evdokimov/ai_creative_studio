@@ -78,9 +78,7 @@ def unload_vlm():
         if hasattr(_vlm_instance, attr):
             setattr(_vlm_instance, attr, None)
     _vlm_instance = None
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
+    from models.mem import release_cuda
+
+    release_cuda()
+    print("   ♻️  Unloaded VLM")

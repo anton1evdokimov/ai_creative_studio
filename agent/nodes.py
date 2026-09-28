@@ -39,7 +39,7 @@ def _release_mlx():
 
 
 def _keep_vlm() -> bool:
-    """Resident VLM only on CUDA. Mac still fully unloads for unified RAM."""
+    """CUDA-only flag: allow optional CPU park. Default is full unload (Docker RAM)."""
     try:
         import torch
 
@@ -53,27 +53,32 @@ def _keep_vlm() -> bool:
     return True
 
 
+def _park_to_cpu() -> bool:
+    """Park 32B weights in RAM. False by default — VLM+LLM on CPU ≈ OOM in Docker."""
+    if not _keep_vlm():
+        return False
+    return bool(load_pipeline_config().get("park_to_cpu", False))
+
+
 def _unload_vlm_weights():
-    if _keep_vlm():
+    if _park_to_cpu():
         park_vlm()
         return
     reset_product_analyzer()
     reset_image_scorer()
     unload_vlm()
     _release_mlx()
-    print("   ♻️  Unloaded VLM")
 
 
 def _unload_llm_weights():
     global _llm
-    if _keep_vlm():
+    if _park_to_cpu():
         park_llm()
         return
     _llm = None
     reset_prompt_refiner()
     unload_llm()
     _release_mlx()
-    print("   ♻️  Unloaded LLM")
 
 
 def _unload_clip_weights():
@@ -82,13 +87,13 @@ def _unload_clip_weights():
 
 
 def _unload_flux_weights():
-    if _keep_vlm():
+    if _park_to_cpu():
         park_image_backend()
         return
     reset_flux_generator()
     unload_image_backend()
     _release_mlx()
-    print("   ♻️  Unloaded FLUX")
+    print("   ♻️  Unloaded diffusion")
 
 
 def analyze_product(state):
@@ -171,13 +176,26 @@ def create_concepts(state):
     if isinstance(pa, dict):
         lux = str(pa.get("luxury_level") or pa.get("style") or "")
 
+    from models.prompt_spec import apply_scene_to_concept, parse_scene_prompt
+
+    if not state.get("scene_spec"):
+        state["scene_spec"] = parse_scene_prompt(str(state.get("scene_prompt") or ""))
+    scene_spec = state.get("scene_spec") or {}
+    scene_lock = ""
+    if scene_spec:
+        scene_lock = (
+            "\nUSER SCENE LOCK (keep these fields in EVERY concept; vary only camera/mood if needed):\n"
+            + json.dumps(scene_spec, ensure_ascii=False)
+            + "\n"
+        )
+
     prompt = f"""You are a senior creative director for luxury and fashion brands.
 
 PRODUCT:
 Description: {product_desc}
 Luxury / vibe: {lux}
 Analysis: {product_info}
-
+{scene_lock}
 TASK: Generate exactly {num_concepts} diverse advertising creative concepts.
 Each concept must be visually distinct (different scene, mood, camera angle, lighting, background).
 The HERO is this exact product — keep its category. If it is apparel/clothing, show the GARMENT
@@ -213,6 +231,10 @@ RESPOND ONLY AS VALID JSON — no markdown, no extra words:
         concepts = fallback_concepts(
             looks_like_apparel(state.get("product_analysis_obj") or pa, product_desc, img)
         )
+
+    if scene_spec:
+        concepts = [apply_scene_to_concept(c, scene_spec) for c in concepts]
+        print(f"   🔒 Scene lock: {json.dumps(scene_spec, ensure_ascii=False)[:180]}")
 
     print(f"   ✅ Got {len(concepts)} concepts")
     for i, c in enumerate(concepts):
@@ -286,9 +308,14 @@ def refine_prompts(state):
     analysis_obj = state.get("product_analysis_obj") or None
     refined = []
     for idx, concept in enumerate(winners):
-        r = refiner.refine(concept, product_analysis=analysis_obj)
+        r = refiner.refine(
+            concept,
+            product_analysis=analysis_obj,
+            scene_spec=state.get("scene_spec") or None,
+        )
         refined.append(r)
         print(f"   [{idx+1}] {r.concept_name}")
+        print(f"       json: {json.dumps(r.prompt_json, ensure_ascii=False)[:200]}")
         print(f"       +ve ({len(r.positive_prompt)} chars): {r.positive_prompt[:110]}…")
         if r.style_boost_tags:
             print(f"       style boost: {', '.join(r.style_boost_tags[:4])}")
@@ -300,6 +327,8 @@ def refine_prompts(state):
 
 def generate_images(state):
     print("🎨 [5/7] Generating images...")
+    _unload_llm_weights()
+    _unload_vlm_weights()
     wake_image_backend()
     generator = get_flux_generator()
     concepts = state.get("ranked_concepts") or state.get("creative_concepts", [])
@@ -448,7 +477,7 @@ def evaluate_images(state):
         })
         print(f"       pre-score={pre:.3f}")
 
-    if use_clip and not _keep_vlm():
+    if use_clip:
         _unload_clip_weights()
 
     if use_dino and rows and product_image:
@@ -464,9 +493,8 @@ def evaluate_images(state):
                     r["clip_m"].dino_i_raw = raw
                 print(f"       {r['path'].split('/')[-1]} DINO-I={s:.2f} (cos={raw:.3f})")
                 r["pre"] = _blend(r["clip_m"], None, r["q"]["quality_factor"], s)
-            if not _keep_vlm():
-                unload_dino_metrics()
-                print("   ♻️  Unloaded DINOv2")
+            unload_dino_metrics()
+            print("   ♻️  Unloaded DINOv2")
         except Exception as exc:
             print(f"⚠️  DINOv2 skipped: {type(exc).__name__}: {exc}")
 

@@ -74,6 +74,11 @@ def main() -> int:
         help="Product photo path. Default: first image in data/input/",
     )
     parser.add_argument("--description", default="", help="Optional product text (VLM can work from photo only)")
+    parser.add_argument(
+        "--scene",
+        default="",
+        help='Scene lock: JSON {"scene":"...","lighting":"..."} or a plain sentence',
+    )
     args = parser.parse_args()
 
     print(BANNER)
@@ -82,9 +87,13 @@ def main() -> int:
     product_image = resolve_product_image(args.image)
     print(f"📷 Product image: {product_image}")
 
+    from models.prompt_spec import parse_scene_prompt
+
     input_data = {
         "product_image": str(product_image),
         "product_description": args.description,
+        "scene_prompt": args.scene,
+        "scene_spec": parse_scene_prompt(args.scene),
         "retry_count": 0,
     }
 

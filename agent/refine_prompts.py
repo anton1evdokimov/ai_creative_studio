@@ -23,45 +23,40 @@ from schemas.creative import CreativeConcept
 from schemas.generation import RefinedPrompt
 from models.llm.factory import create_llm
 from models.llm.parser import _safe_json_loads
+from models.prompt_spec import flatten_prompt_json, negative_from_spec
 
 
-_REFINEMENT_PROMPT = """You are a senior diffusion prompt engineer for commercial advertising photography,
-specialising in FLUX.1-schnell 4-step sampling on Apple Silicon. Given a creative concept for a product
-advertisement, produce a polished, highly specific prompt set.
+_REFINEMENT_PROMPT = """You are a senior diffusion prompt engineer for commercial advertising photography.
+Given a creative concept, output ONE JSON object that will be used as the generation prompt.
 
 ## Product / campaign context (VLM analysis of the real product)
 ```
 {product_context}
 ```
 
-## Creative concept to translate
+## Creative concept
 ```json
 {concept_json}
 ```
 
-## What to output: a single JSON object
-```
-{{
-  "positive_prompt": "A single long string, comma separated, ENGLISH only. START with the exact product
-    (hoodie / t-shirt / serum bottle / etc) from context — never leave the subject unnamed.
-    You MUST include:
-    - EXACT product and its visual features from concept + context (if apparel: fabric, colorway, hood/pockets/print/fit;
-      if bottle/food: label, cap, silhouette, liquid/color)
-    - camera: e.g. 'Hasselblad X1D II, 80mm f/2.2 lens'
-    - lighting: TLCI 98+, modifier, direction
-    - a RICH physical scene: named location, surfaces, props, time of day (kitchen table, fridge door, wooden counter,
-      market stall, sunlit windowsill). Do NOT default to empty white cyclorama / seamless void.
-    - entire product in frame, no crop
-    - style: commercial advertising photography, ultra sharp on the product
-    NO numbered lists, NO newlines inside the string.",
-  "negative_prompt": "A single string, comma separated, ENGLISH only. If apparel: extra hoods, extra sleeves, melted fabric, deformed collar, extra limbs.
-    If bottle: cropped bottle, cut-off cap, melted glass, extra bottles. Also: empty white background, plain cyclorama, catalog void, watermarks, captions, jpeg artifacts, cartoon, blurry.",
-  "style_boost_tags": ["list", "of", "2-6", "extra", "tags"],
-  "estimated_prompt_strength_notes": "1 short sentence explaining how likely this prompt is to produce on-model luxury results for FLUX.1 schnell 4-step"
-}}
+## User scene lock (must keep these fields if non-empty; do not invent a different location)
+```json
+{scene_json}
 ```
 
-Answer ONLY the JSON object, no markdown fences, no preamble, no commentary."""
+## Output — ONLY this JSON object, ENGLISH values, no markdown:
+{{
+  "product": "exact product, visual features from context (label, material, shape)",
+  "scene": "physical place, surfaces, props, time of day",
+  "lighting": "modifiers, direction, Kelvin / TLCI if known",
+  "camera": "body + lens + angle, e.g. Hasselblad X1D II, 80mm f/2.2, eye-level",
+  "style": "photography style, commercial advertising",
+  "mood": "emotional tone",
+  "composition": "framing, product fully in frame",
+  "negative_prompt": "comma separated artifacts to avoid",
+  "style_boost_tags": ["2-6 short tags"]
+}}
+"""
 
 
 _refiner_instance = None
@@ -88,19 +83,22 @@ class PromptRefiner:
         self,
         concept: CreativeConcept,
         product_analysis: Any | None = None,
+        scene_spec: dict | None = None,
     ) -> RefinedPrompt:
         t0 = time.time()
         context_text = self._format_context(product_analysis)
         concept_json = concept.model_dump_json(indent=2)
+        scene_json = json.dumps(scene_spec or {}, ensure_ascii=False, indent=2)
 
         filled = _REFINEMENT_PROMPT.format(
             product_context=context_text[:2200] if context_text else "(no product image provided, use concept fields only)",
             concept_json=concept_json,
+            scene_json=scene_json,
         )
         raw = self.llm.generate(
             filled,
             system_prompt=(
-                "You are a precision FLUX prompt engineer. Answer ONLY a valid JSON object. "
+                "You are a precision prompt engineer. Answer ONLY a valid JSON object. "
                 "No markdown fences, no prose before or after."
             ),
             max_tokens=900,
@@ -110,17 +108,45 @@ class PromptRefiner:
         if not isinstance(parsed, dict):
             parsed = {}
 
-        positive = self._as_str(parsed.get("positive_prompt"))
-        negative = self._as_str(parsed.get("negative_prompt"))
-        tags = self._as_list(parsed.get("style_boost_tags"))
-        notes = self._as_str(parsed.get("estimated_prompt_strength_notes"))
+        from models.product_kind import category_negative, looks_like_apparel, product_noun
 
+        noun = product_noun(product_analysis)
+        spec = dict(scene_spec or {})
+        for k in ("product", "scene", "lighting", "camera", "style", "mood", "composition"):
+            v = parsed.get(k) or (parsed.get("camera_angle") if k == "camera" else None)
+            if v and k not in spec:
+                spec[k] = v
+        if not spec.get("product"):
+            spec["product"] = noun
+        if not spec.get("scene"):
+            spec["scene"] = concept.scene
+        if not spec.get("lighting"):
+            spec["lighting"] = concept.lighting
+        if not spec.get("style"):
+            spec["style"] = concept.style
+        if not spec.get("mood") and concept.mood:
+            spec["mood"] = concept.mood
+        if not spec.get("camera") and concept.camera_angle:
+            spec["camera"] = concept.camera_angle
+        if not spec.get("composition") and concept.composition:
+            spec["composition"] = concept.composition
+        tags = self._as_list(parsed.get("style_boost_tags") or spec.get("style_boost_tags"))
+        if tags:
+            spec["style_boost_tags"] = tags
+
+        positive = flatten_prompt_json(spec)
+        if parsed.get("positive_prompt") and not flatten_prompt_json(
+            {k: parsed.get(k) for k in ("product", "scene", "lighting", "camera") if parsed.get(k)}
+        ):
+            positive = self._as_str(parsed.get("positive_prompt")) or positive
         if not positive or self._looks_like_instruction(positive):
             positive = self._fallback_positive(concept, product_analysis)
-        if not negative or self._looks_like_instruction(negative):
-            from models.product_kind import category_negative, looks_like_apparel
 
+        negative = negative_from_spec(spec) or self._as_str(parsed.get("negative_prompt"))
+        if not negative or self._looks_like_instruction(negative):
             negative = category_negative(looks_like_apparel(product_analysis))
+        spec["negative_prompt"] = negative
+        notes = self._as_str(parsed.get("estimated_prompt_strength_notes"))
         took = time.time() - t0
 
         return RefinedPrompt(
@@ -129,8 +155,9 @@ class PromptRefiner:
             positive_prompt=positive.strip().rstrip(","),
             negative_prompt=negative.strip().rstrip(","),
             style_boost_tags=tags,
-            estimated_prompt_strength_notes=notes or f"Auto-fallback prompt. LLM refine took {took:,.1f}s.",
+            estimated_prompt_strength_notes=notes or f"JSON prompt. LLM refine took {took:,.1f}s.",
             raw_llm_output=raw[:4000] if raw else "",
+            prompt_json=spec,
         )
 
     # ------------------------------------------------------------------

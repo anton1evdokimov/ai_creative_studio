@@ -14,11 +14,15 @@ class CUDABackend(LLMBackend):
         self._parked = False
         print(f"Loading model on {self.device}")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            dtype=torch.bfloat16,
-            device_map="auto",
-        )
+        load_kw = dict(dtype=torch.bfloat16, low_cpu_mem_usage=True)
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name, device_map="cuda", **load_kw
+            )
+        except Exception:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_name, device_map="auto", **load_kw
+            )
 
     def park(self) -> None:
         if self.model is None or self._parked:

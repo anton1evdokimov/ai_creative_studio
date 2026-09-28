@@ -33,13 +33,21 @@ class CUDAVLMBackend:
             except ImportError:
                 from transformers import AutoProcessor, AutoModelForImageTextToText as ModelCls
 
-        kwargs = {"torch_dtype": torch.bfloat16, "device_map": "auto"}
+        kwargs = {
+            "torch_dtype": torch.bfloat16,
+            "device_map": "cuda",
+            "low_cpu_mem_usage": True,
+        }
         try:
             self._model = ModelCls.from_pretrained(self.model_name, **kwargs)
         except Exception:
-            self._model = ModelCls.from_pretrained(
-                self.model_name, trust_remote_code=True, **kwargs
-            )
+            kwargs["device_map"] = "auto"
+            try:
+                self._model = ModelCls.from_pretrained(self.model_name, **kwargs)
+            except Exception:
+                self._model = ModelCls.from_pretrained(
+                    self.model_name, trust_remote_code=True, **kwargs
+                )
         try:
             self._processor = AutoProcessor.from_pretrained(self.model_name)
         except Exception:

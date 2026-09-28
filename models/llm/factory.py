@@ -67,7 +67,7 @@ def park_llm() -> None:
 
 
 def unload_llm():
-    """Drop the shared LLM so FLUX can use unified RAM."""
+    """Drop the shared LLM so diffusion can use RAM/VRAM."""
     global _llm_instance
     if _llm_instance is None:
         return
@@ -75,3 +75,7 @@ def unload_llm():
         if hasattr(_llm_instance, attr):
             setattr(_llm_instance, attr, None)
     _llm_instance = None
+    from models.mem import release_cuda
+
+    release_cuda()
+    print("   ♻️  Unloaded LLM")

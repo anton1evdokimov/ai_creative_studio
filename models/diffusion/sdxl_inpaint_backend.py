@@ -36,7 +36,15 @@ class SDXLInpaintBackend(ImageBackend):
         except Exception:
             pipe = AutoPipelineForInpainting.from_pretrained(model_id, **kwargs)
         if self.device == "cuda":
-            if hasattr(pipe, "enable_model_cpu_offload"):
+            if hasattr(pipe, "enable_attention_slicing"):
+                pipe.enable_attention_slicing("max")
+            if hasattr(pipe, "enable_vae_slicing"):
+                pipe.enable_vae_slicing()
+            if hasattr(pipe, "enable_vae_tiling"):
+                pipe.enable_vae_tiling()
+            if hasattr(pipe, "enable_sequential_cpu_offload"):
+                pipe.enable_sequential_cpu_offload()
+            elif hasattr(pipe, "enable_model_cpu_offload"):
                 pipe.enable_model_cpu_offload()
             else:
                 pipe.to(self.device)

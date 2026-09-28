@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from schemas.creative import CreativeConcept
 
@@ -12,11 +12,13 @@ class RefinedPrompt(BaseModel):
     style_boost_tags: list[str] = []
     estimated_prompt_strength_notes: str = ""
     raw_llm_output: str = ""
+    prompt_json: dict = Field(default_factory=dict)
 
 
 class ImageGenerationResult(BaseModel):
     image_path: str
     prompt: str
+    prompt_json: dict = Field(default_factory=dict)
     refined_prompt: RefinedPrompt | None = None
     model: str
     seed: int | None = None
