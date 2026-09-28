@@ -1,0 +1,16 @@
+services:
+  studio:
+    image: ai-creative-studio:latest
+    build: .
+    gpus: all
+    ports:
+      - "8080:8080"
+    environment:
+      HF_HOME: /models/hf
+      HUGGINGFACE_HUB_CACHE: /models/hf/hub
+      TRANSFORMERS_CACHE: /models/hf/hub
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - /mnt/evo4tb/evdokimov/.hf_cache:/models/hf
+      - ./config.yaml:/app/config.yaml:ro
+      - ./generated:/app/generated
