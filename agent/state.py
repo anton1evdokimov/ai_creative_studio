@@ -41,3 +41,4 @@ class PipelineState(TypedDict, total=False):
 
     # ---- CONTROL FLOW ----
     retry_count: int
+    human_action: str

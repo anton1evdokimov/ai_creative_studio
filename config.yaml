@@ -96,6 +96,8 @@ pipeline:
   # park_to_cpu: true only on a host with plenty of RAM, not in a memory-capped container.
   keep_vlm: true
   park_to_cpu: false
+  # After evaluation: pause for a human to pick still / video / retry. Resume: POST /jobs/{id}/resume
+  human_gate: false
 
 video:
   enabled: false

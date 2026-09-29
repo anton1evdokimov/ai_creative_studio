@@ -22,6 +22,8 @@ opencv-python-headless>=4.8.0
 
 # ---- Core framework ----
 langgraph>=1.1.0
+langgraph-checkpoint-sqlite>=2.0.0
+langgraph-checkpoint-redis>=0.1.0
 langchain>=0.3.0
 langchain-core>=0.3.0
 langsmith>=0.1.0

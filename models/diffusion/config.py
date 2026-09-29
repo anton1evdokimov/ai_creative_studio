@@ -240,6 +240,7 @@ def load_pipeline_config() -> dict:
         "max_retries": 0,
         "keep_vlm": True,
         "park_to_cpu": False,
+        "human_gate": False,
     }
     return {**defaults, **config}
 

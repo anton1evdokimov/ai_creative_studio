@@ -106,11 +106,17 @@ def main() -> int:
 
     try:
         print("🛠️  Building LangGraph pipeline (7 stages)...")
-        graph = build_graph()
+        graph = build_graph(db_path=str(Path("generated") / "langgraph.sqlite"))
         print("✅ Pipeline compiled successfully")
         print()
 
-        result = graph.invoke(input_data)
+        result = graph.invoke(input_data, {"configurable": {"thread_id": "cli"}})
+        try:
+            from agent.persist import save_graph_state
+
+            save_graph_state("generated", "cli", result if isinstance(result, dict) else {})
+        except Exception:
+            pass
 
         dt = time.time() - t0
         print()

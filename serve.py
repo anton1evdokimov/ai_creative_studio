@@ -13,9 +13,10 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from agent.graph import build_graph
+from agent.persist import save_graph_state
 from models.media import ingest_image_bytes
 from models.prompt_spec import parse_scene_prompt
-from serve_jobs import attach_job_inputs, create_job, get_job, run_exclusive
+from serve_jobs import attach_job_inputs, create_job, get_job, run_exclusive, set_jobs_root
 
 INPUT_DIR = Path(os.environ.get("AICS_INPUT_DIR", "/data/input"))
 OUTPUT_ROOT = Path(os.environ.get("AICS_OUTPUT_DIR", "/app/generated"))
@@ -74,6 +75,7 @@ async function startJob() {
     if (my !== pollGen) return;
     go.textContent = st.status || "…";
     if (st.status === "done") { window.location = "/jobs/" + id + "?view=html"; return; }
+    if (st.status === "awaiting_human") { window.location = "/jobs/" + id + "?view=html"; return; }
     if (st.status === "error") { go.disabled = false; go.textContent = st.error || "error"; return; }
     setTimeout(tick, 3000);
   };
@@ -173,7 +175,8 @@ def _startup() -> None:
     global _graph
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    _graph = build_graph()
+    set_jobs_root(OUTPUT_ROOT)
+    _graph = build_graph(db_path=str(OUTPUT_ROOT / "langgraph.sqlite"))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -224,21 +227,123 @@ def _payload(result: dict, job_id: str) -> dict:
     }
 
 
-def _run_graph(image_path: str, description: str, scene: str = "", want_video: bool = False) -> dict:
+def _graph_config(jid: str) -> dict:
+    return {"configurable": {"thread_id": jid}}
+
+
+def _interrupt_payload(graph, config: dict):
+    try:
+        snap = graph.get_state(config)
+    except Exception:
+        return None
+    nxt = tuple(getattr(snap, "next", None) or ())
+    if not nxt:
+        return None
+    for task in getattr(snap, "tasks", None) or ():
+        for item in getattr(task, "interrupts", None) or ():
+            val = getattr(item, "value", item)
+            if val is not None:
+                return val
+    return {"next": list(nxt)}
+
+
+def _run_graph(
+    image_path: str,
+    description: str,
+    scene: str = "",
+    want_video: bool = False,
+    jid: str = "cli",
+) -> dict:
     if _graph is None:
         raise RuntimeError("Graph not ready")
     spec = parse_scene_prompt(scene)
-    result = _graph.invoke(
-        {
-            "product_image": image_path,
-            "product_description": description,
-            "scene_prompt": scene,
-            "scene_spec": spec,
-            "want_video": bool(want_video),
-            "retry_count": 0,
-        }
-    )
+    config = _graph_config(jid)
+    inputs = {
+        "product_image": image_path,
+        "product_description": description,
+        "scene_prompt": scene,
+        "scene_spec": spec,
+        "want_video": bool(want_video),
+        "retry_count": 0,
+    }
+    try:
+        result = _graph.invoke(inputs, config)
+    except Exception:
+        paused = _interrupt_payload(_graph, config)
+        if paused is not None:
+            return {"_paused": True, "interrupt": paused}
+        raise
+    try:
+        save_graph_state(OUTPUT_ROOT, jid, result if isinstance(result, dict) else {})
+    except Exception:
+        pass
+    paused = _interrupt_payload(_graph, config)
+    if paused is not None:
+        return {"_paused": True, "interrupt": paused}
     return result
+
+
+def _gate_html(jid: str, job: dict) -> str:
+    payload = job.get("interrupt") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    cards = []
+    for s in payload.get("images") or []:
+        if not isinstance(s, dict):
+            continue
+        p = s.get("image") or s.get("path") or ""
+        if not p:
+            continue
+        src = html.escape(_file_url(p))
+        name = html.escape(Path(p).name)
+        score = html.escape(str(s.get("score", "")))
+        cards.append(
+            f'<label class="pick"><input type="radio" name="best" value="{html.escape(p)}">'
+            f'<img src="{src}" alt="{name}"><span>{name} · {score}</span></label>'
+        )
+    want = "checked" if payload.get("want_video") else ""
+    return f"""<!DOCTYPE html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Выбор кадра</title>
+<style>
+body{{font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:52rem;margin:2rem auto;padding:0 1.2rem}}
+.pick{{display:block;margin:1rem 0;cursor:pointer}}
+img{{max-width:100%;border-radius:10px;border:1px solid #333}}
+button{{margin:.5rem .4rem 0 0;background:#6c5ce7;border:0;color:#fff;padding:.6rem 1rem;border-radius:8px;cursor:pointer}}
+</style></head><body>
+<h1>Human-in-the-loop</h1>
+<p>Выбери кадр, видео, дальше / retry / стоп.</p>
+<form id="g">
+{''.join(cards) or '<p>Нет кадров.</p>'}
+<p><label><input type="checkbox" id="vid" {want}> видео</label></p>
+<button type="button" data-a="continue">Дальше</button>
+<button type="button" data-a="retry">Retry промпт</button>
+<button type="button" data-a="end">Стоп</button>
+</form>
+<script>
+const jid = {json.dumps(jid)};
+document.querySelectorAll("button[data-a]").forEach(btn => btn.onclick = async () => {{
+  const best = (document.querySelector("input[name=best]:checked") || {{}}).value;
+  const body = {{
+    action: btn.dataset.a,
+    want_video: document.getElementById("vid").checked,
+  }};
+  if (best) body.best_image = best;
+  btn.disabled = true;
+  await fetch("/jobs/" + jid + "/resume", {{method: "POST", headers: {{"Content-Type": "application/json"}}, body: JSON.stringify(body)}});
+  const tick = async () => {{
+    const st = await (await fetch("/jobs/" + jid)).json();
+    if (st.status === "done") {{ window.location = "/jobs/" + jid + "?view=html"; return; }}
+    if (st.status === "error") {{ alert(st.error || "error"); return; }}
+    if (st.status === "awaiting_human") {{ window.location.reload(); return; }}
+    setTimeout(tick, 3000);
+  }};
+  tick();
+}});
+</script>
+</body></html>
+"""
 
 
 @app.post("/jobs")
@@ -263,7 +368,10 @@ async def create_pipeline_job(
     attach_job_inputs(jid, path, desc, scene_txt, want_video)
 
     def work():
-        return _payload(_run_graph(path, desc, scene_txt, want_video), jid)
+        raw = _run_graph(path, desc, scene_txt, want_video, jid)
+        if isinstance(raw, dict) and raw.get("_paused"):
+            return raw
+        return _payload(raw, jid)
 
     threading.Thread(target=lambda: run_exclusive(jid, work), daemon=True).start()
     return JSONResponse({"job_id": jid, "status": "queued"}, status_code=202)
@@ -274,9 +382,13 @@ def job_status(jid: str, view: str = ""):
     job = get_job(jid)
     if job is None:
         raise HTTPException(404, "unknown job")
+    if view == "html" and job.get("status") == "awaiting_human":
+        return HTMLResponse(_gate_html(jid, job))
     if view == "html" and job.get("status") == "done" and job.get("result"):
         return HTMLResponse(_result_html(job["result"]))
     body = {k: job[k] for k in ("status", "error") if k in job}
+    if job.get("interrupt"):
+        body["interrupt"] = job["interrupt"]
     if job.get("result"):
         body["result"] = job["result"]
     return JSONResponse(body)
@@ -297,10 +409,50 @@ def rerun_job(jid: str):
     attach_job_inputs(new_id, path, desc, scene_txt, want_video)
 
     def work():
-        return _payload(_run_graph(path, desc, scene_txt, want_video), new_id)
+        raw = _run_graph(path, desc, scene_txt, want_video, new_id)
+        if isinstance(raw, dict) and raw.get("_paused"):
+            return raw
+        return _payload(raw, new_id)
 
     threading.Thread(target=lambda: run_exclusive(new_id, work), daemon=True).start()
     return JSONResponse({"job_id": new_id, "status": "queued"}, status_code=202)
+
+
+@app.post("/jobs/{jid}/resume")
+async def resume_job(jid: str, request: Request):
+    if _graph is None:
+        raise HTTPException(503, "Graph not ready")
+    job = get_job(jid)
+    if job is None:
+        raise HTTPException(404, "unknown job")
+    if job.get("status") != "awaiting_human":
+        raise HTTPException(409, f"job is {job.get('status')}, not awaiting_human")
+    body = await request.json()
+    if not isinstance(body, dict):
+        body = {}
+
+    def work():
+        from langgraph.types import Command
+
+        config = _graph_config(jid)
+        try:
+            result = _graph.invoke(Command(resume=body), config)
+        except Exception:
+            paused = _interrupt_payload(_graph, config)
+            if paused is not None:
+                return {"_paused": True, "interrupt": paused}
+            raise
+        try:
+            save_graph_state(OUTPUT_ROOT, jid, result if isinstance(result, dict) else {})
+        except Exception:
+            pass
+        paused = _interrupt_payload(_graph, config)
+        if paused is not None:
+            return {"_paused": True, "interrupt": paused}
+        return _payload(result, jid)
+
+    threading.Thread(target=lambda: run_exclusive(jid, work), daemon=True).start()
+    return JSONResponse({"job_id": jid, "status": "queued"}, status_code=202)
 
 
 @app.post("/generate")

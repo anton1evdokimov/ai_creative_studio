@@ -638,6 +638,41 @@ def improve_prompt(state):
     return state
 
 
+def human_gate(state):
+    """Pause after stills: pick best frame, video on/off, or retry. Off unless pipeline.human_gate."""
+    pipe_cfg = load_pipeline_config()
+    if not bool(pipe_cfg.get("human_gate")):
+        return state
+    try:
+        from langgraph.types import interrupt
+    except ImportError:
+        print("👤 [human] langgraph.types.interrupt missing — auto-pass")
+        return state
+    payload = {
+        "best_image": state.get("best_image"),
+        "images": state.get("evaluation_results") or [],
+        "want_video": bool(state.get("want_video")),
+    }
+    print("👤 [human] waiting for POST /jobs/{id}/resume")
+    decision = interrupt(payload)
+    if not isinstance(decision, dict):
+        return state
+    if decision.get("best_image"):
+        state["best_image"] = str(decision["best_image"])
+    if "want_video" in decision:
+        state["want_video"] = bool(decision["want_video"])
+    state["human_action"] = str(decision.get("action") or "continue")
+    print(f"   👤 resume action={state['human_action']}  video={state.get('want_video')}")
+    return state
+
+
+def human_router(state):
+    action = str(state.get("human_action") or "continue")
+    if action in {"continue", "retry", "end"}:
+        return action
+    return "continue"
+
+
 def quality_router(state):
     pipe_cfg = load_pipeline_config()
     threshold = float(pipe_cfg["quality_threshold"])
