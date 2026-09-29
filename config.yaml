@@ -103,6 +103,7 @@ video:
   num_frames: 121
   num_inference_steps: 50
   guidance_scale: 5.0
+  # Native Lite I2V; portrait stills swap to 512x768 (letterbox, no stretch).
   width: 768
   height: 512
 
