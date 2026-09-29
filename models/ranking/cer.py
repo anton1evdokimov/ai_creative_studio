@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
 def normalize_label(text: str) -> str:
@@ -45,18 +45,46 @@ def character_error_rate(hyp: str, ref: str) -> float:
     return min(1.0, levenshtein(h, r) / max(len(r), 1))
 
 
+def _prep_ocr_views(im: Image.Image) -> list[Image.Image]:
+    rgb = im.convert("RGB")
+    w, h = rgb.size
+    short = min(w, h)
+    if short < 1100:
+        s = 1100 / max(short, 1)
+        rgb = rgb.resize((max(1, int(w * s)), max(1, int(h * s))), Image.Resampling.LANCZOS)
+    gray = ImageOps.grayscale(rgb)
+    gray = ImageEnhance.Contrast(gray).enhance(2.2)
+    gray = ImageEnhance.Sharpness(gray).enhance(1.8)
+    views = [gray, ImageOps.autocontrast(gray), gray.filter(ImageFilter.SHARPEN)]
+    import numpy as np
+
+    mean = float(np.asarray(gray).mean())
+    if mean < 100:
+        views.append(ImageOps.invert(gray))
+    return views
+
+
 def ocr_image(path: str | Path, lang: str = "rus+eng") -> str:
     try:
         import pytesseract
     except ImportError as exc:
         raise RuntimeError("pip install pytesseract and apt/brew install tesseract") from exc
     im = Image.open(path).convert("RGB")
-    w, h = im.size
-    short = min(w, h)
-    if short < 720:
-        s = 720 / max(short, 1)
-        im = im.resize((max(1, int(w * s)), max(1, int(h * s))), Image.Resampling.LANCZOS)
-    return pytesseract.image_to_string(im, lang=lang) or ""
+    langs = [lang]
+    if "+" in (lang or ""):
+        langs.extend(x.strip() for x in lang.split("+") if x.strip() and x.strip() != lang)
+    configs = ("--oem 3 --psm 6", "--oem 3 --psm 11", "--oem 3 --psm 4", "--oem 3 --psm 7")
+    best = ""
+    for view in _prep_ocr_views(im):
+        for lg in langs:
+            for cfg in configs:
+                try:
+                    t = pytesseract.image_to_string(view, lang=lg, config=cfg) or ""
+                except Exception:
+                    continue
+                if len(t.strip()) > len(best.strip()):
+                    best = t
+    return best
 
 
 def score_cer(
@@ -64,10 +92,13 @@ def score_cer(
     product: dict | None,
     lang: str = "rus+eng",
 ) -> tuple[float | None, float | None, str]:
-    """Returns (cer 0..1, cer_score 1-cer, ocr_text). None if no reference."""
+    """Returns (cer 0..1, cer_score 1-cer, ocr_text). None if no reference or OCR empty."""
     ref = reference_label(product)
     if not ref:
         return None, None, ""
     hyp = ocr_image(image_path, lang=lang)
+    ocr_txt = " ".join(hyp.split())[:240]
+    if not normalize_label(hyp):
+        return None, None, ocr_txt
     cer = character_error_rate(hyp, ref)
-    return round(cer, 4), round(1.0 - cer, 4), " ".join(hyp.split())[:240]
+    return round(cer, 4), round(1.0 - cer, 4), ocr_txt

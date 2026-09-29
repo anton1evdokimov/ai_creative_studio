@@ -506,7 +506,8 @@ def evaluate_images(state):
                 cer, cer_s, ocr_txt = score_cer(r["path"], pa if isinstance(pa, dict) else {}, ocr_lang)
                 r["cer"], r["cer_score"], r["ocr_text"] = cer, cer_s, ocr_txt
                 if cer is None:
-                    print(f"       {r['path'].split('/')[-1]} CER skipped (no label text)")
+                    why = "OCR empty" if (pa.get("extracted_text_ocr") or pa.get("product_name")) else "no label text"
+                    print(f"       {r['path'].split('/')[-1]} CER skipped ({why})")
                 else:
                     print(
                         f"       {r['path'].split('/')[-1]} CER={cer:.3f} "

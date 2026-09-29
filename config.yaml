@@ -74,7 +74,8 @@ diffusion:
   inpaint:
     model: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     strength: 0.92
-    mask_dilate: 8
+    mask_dilate: 4
+    mask_close: 7
     white_thr: 238
     long_side: 1024
     save_mask: true

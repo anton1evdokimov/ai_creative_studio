@@ -82,6 +82,7 @@ class SDXLInpaintBackend(ImageBackend):
             raw,
             dilate_px=int(cfg.get("mask_dilate") or 8),
             white_thr=int(cfg.get("white_thr") or 238),
+            close_px=int(cfg.get("mask_close") or 5),
         )
         image, mask_l = letterbox_rgb_mask(raw, mask, w, h)
         if cfg.get("save_mask", True):
