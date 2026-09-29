@@ -79,6 +79,12 @@ def main() -> int:
         default="",
         help='Scene lock: JSON {"scene":"...","lighting":"..."} or a plain sentence',
     )
+    parser.add_argument(
+        "--video",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Generate video after stills (default: config video.enabled)",
+    )
     args = parser.parse_args()
 
     print(BANNER)
@@ -94,6 +100,7 @@ def main() -> int:
         "product_description": args.description,
         "scene_prompt": args.scene,
         "scene_spec": parse_scene_prompt(args.scene),
+        "want_video": args.video,
         "retry_count": 0,
     }
 

@@ -36,6 +36,8 @@ input[type=file],input[type=text],textarea{width:100%;box-sizing:border-box;back
 button{margin-top:1.1rem;background:#6c5ce7;border:0;color:#fff;padding:.7rem 1.2rem;border-radius:8px;font-size:1rem;cursor:pointer}
 button.secondary{background:#333;margin-left:.5rem}
 button:disabled{opacity:.5}
+label.chk{display:flex;align-items:center;gap:.55rem;margin-top:1rem;color:#ccc;font-size:.95rem}
+label.chk input{width:auto;margin:0}
 .hint{color:#888;font-size:.85rem;margin-top:.8rem}
 </style></head><body>
 <h1>AI Creative Studio</h1>
@@ -47,6 +49,7 @@ button:disabled{opacity:.5}
 <input type="text" name="description" placeholder="кефир, худи, сыворотка…">
 <label>Промпт сцены (JSON или текст)</label>
 <textarea name="scene" rows="8" placeholder='{"scene":"rustic wooden table, morning light","lighting":"soft window light from the left","mood":"warm"}'></textarea>
+<label class="chk"><input type="checkbox" name="video" value="1"> Генерировать видео</label>
 <button type="submit" id="go">Сгенерировать</button>
 <button type="button" id="restart" class="secondary">Перезапустить генерацию</button>
 <p class="hint">Сцена: JSON с полями scene, lighting, camera, style, mood — или одна строка. Запрос в очередь GPU. Перезапуск — те же фото, описание и сцена.</p>
@@ -221,7 +224,7 @@ def _payload(result: dict, job_id: str) -> dict:
     }
 
 
-def _run_graph(image_path: str, description: str, scene: str = "") -> dict:
+def _run_graph(image_path: str, description: str, scene: str = "", want_video: bool = False) -> dict:
     if _graph is None:
         raise RuntimeError("Graph not ready")
     spec = parse_scene_prompt(scene)
@@ -231,6 +234,7 @@ def _run_graph(image_path: str, description: str, scene: str = "") -> dict:
             "product_description": description,
             "scene_prompt": scene,
             "scene_spec": spec,
+            "want_video": bool(want_video),
             "retry_count": 0,
         }
     )
@@ -242,6 +246,7 @@ async def create_pipeline_job(
     image: UploadFile = File(...),
     description: str = Form(""),
     scene: str = Form(""),
+    video: str = Form(""),
 ):
     if _graph is None:
         raise HTTPException(503, "Graph not ready")
@@ -253,11 +258,12 @@ async def create_pipeline_job(
     jid = create_job()
     desc = description
     scene_txt = scene
+    want_video = str(video).lower() in {"1", "true", "on", "yes"}
     path = str(dest)
-    attach_job_inputs(jid, path, desc, scene_txt)
+    attach_job_inputs(jid, path, desc, scene_txt, want_video)
 
     def work():
-        return _payload(_run_graph(path, desc, scene_txt), jid)
+        return _payload(_run_graph(path, desc, scene_txt, want_video), jid)
 
     threading.Thread(target=lambda: run_exclusive(jid, work), daemon=True).start()
     return JSONResponse({"job_id": jid, "status": "queued"}, status_code=202)
@@ -284,13 +290,14 @@ def rerun_job(jid: str):
     path = str(old["image_path"])
     desc = str(old.get("description") or "")
     scene_txt = str(old.get("scene") or "")
+    want_video = bool(old.get("want_video"))
     if not Path(path).is_file():
         raise HTTPException(400, "source image no longer on disk")
     new_id = create_job()
-    attach_job_inputs(new_id, path, desc, scene_txt)
+    attach_job_inputs(new_id, path, desc, scene_txt, want_video)
 
     def work():
-        return _payload(_run_graph(path, desc, scene_txt), new_id)
+        return _payload(_run_graph(path, desc, scene_txt, want_video), new_id)
 
     threading.Thread(target=lambda: run_exclusive(new_id, work), daemon=True).start()
     return JSONResponse({"job_id": new_id, "status": "queued"}, status_code=202)
@@ -302,9 +309,10 @@ async def generate(
     image: UploadFile = File(...),
     description: str = Form(""),
     scene: str = Form(""),
+    video: str = Form(""),
 ):
     """Enqueue on GPU (same as POST /jobs). Sync wait is not used — one GPU lock is inside the worker."""
-    return await create_pipeline_job(image=image, description=description, scene=scene)
+    return await create_pipeline_job(image=image, description=description, scene=scene, video=video)
 
 
 @app.get("/files")

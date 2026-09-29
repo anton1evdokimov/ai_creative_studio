@@ -663,11 +663,17 @@ def quality_router(state):
 
 def generate_video(state):
     from models.diffusion.config import _load_root_config
+    from models.ranking.clip_metrics import unload_clip_metrics
+    from models.ranking.dino_metrics import unload_dino_metrics
     from models.video.i2v import generate_product_video
+    from models.mem import release_cuda
 
     vcfg = _load_root_config().get("video") or {}
-    if not bool(vcfg.get("enabled", True)):
-        print("🎬 [video] skipped (video.enabled: false)")
+    want = state.get("want_video")
+    if want is None:
+        want = bool(vcfg.get("enabled", False))
+    if not want:
+        print("🎬 [video] skipped")
         return state
     src = state.get("best_image") or (state.get("generated_images") or [None])[0]
     if not src:
@@ -683,19 +689,23 @@ def generate_video(state):
         if rc:
             prompt = f"{getattr(rc[0], 'scene', '')} {getattr(rc[0], 'lighting', '')}".strip()
     out_dir = Path(load_diffusion_config()["output_dir"])
-    dest = out_dir / f"{Path(src).stem}_t2v"
-    backend = str(vcfg.get("backend") or "kandinsky5_t2v")
-    print(f"🎬 [video] T2V backend={backend}  prompt={prompt[:100]!r}")
+    dest = out_dir / f"{Path(src).stem}_i2v"
+    backend = str(vcfg.get("backend") or "kandinsky5_i2v")
+    print(f"🎬 [video] I2V still={Path(src).name}  backend={backend}")
+    print(f"   prompt={prompt[:120]!r}")
+    unload_clip_metrics()
+    unload_dino_metrics()
     park_image_backend()
+    release_cuda()
     path = generate_product_video(
         src,
         dest,
         backend=backend,
         prompt=prompt,
         model_id=str(vcfg.get("model") or ""),
-        num_frames=int(vcfg.get("num_frames") or 241),
-        num_inference_steps=int(vcfg.get("num_inference_steps") or 16),
-        guidance_scale=float(vcfg.get("guidance_scale") or 1.0),
+        num_frames=int(vcfg.get("num_frames") or 121),
+        num_inference_steps=int(vcfg.get("num_inference_steps") or 50),
+        guidance_scale=float(vcfg.get("guidance_scale") or 5.0),
         width=int(vcfg.get("width") or 768),
         height=int(vcfg.get("height") or 512),
     )
