@@ -74,6 +74,34 @@ def flatten_prompt_json(spec: dict[str, Any] | None) -> str:
     return ", ".join(parts)
 
 
+def user_kandinsky_json(
+    scene_raw: str = "",
+    description: str = "",
+    spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build Kandinsky prompt JSON from the user's scene/description only (no LLM)."""
+    data = dict(spec) if spec else parse_scene_prompt(scene_raw)
+    desc = (description or "").strip()
+    if desc and not data.get("product"):
+        data["product"] = desc
+    if not data:
+        text = (scene_raw or desc).strip() or "scene"
+        data = {"scene": text}
+    return data
+
+
+def user_kandinsky_prompt(
+    scene_raw: str = "",
+    description: str = "",
+    spec: dict[str, Any] | None = None,
+    as_json: bool = True,
+) -> tuple[dict[str, Any], str]:
+    data = user_kandinsky_json(scene_raw, description, spec)
+    if as_json:
+        return data, json.dumps(data, ensure_ascii=False)
+    return data, flatten_prompt_json(data) or str(data.get("scene") or "")
+
+
 def apply_scene_to_concept(concept: CreativeConcept, spec: dict[str, Any] | None) -> CreativeConcept:
     if not spec:
         return concept

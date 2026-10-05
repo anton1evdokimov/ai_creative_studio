@@ -334,20 +334,13 @@ def refine_prompts(state):
     return state
 
 
-def _user_t2i_prompt(state) -> str:
-    scene = str(state.get("scene_prompt") or "").strip()
-    desc = str(state.get("product_description") or "").strip()
-    if scene.startswith("{"):
-        from models.prompt_spec import flatten_prompt_json
-
-        flat = flatten_prompt_json(state.get("scene_spec") or {})
-        return (flat or scene).strip()
-    return scene or desc
+def _skip_llm(state) -> bool:
+    return bool(state.get("want_direct") or state.get("want_json_prompt"))
 
 
 def generate_images(state):
-    print("🎨 [5/7] Generating images...")
-    if state.get("want_direct"):
+    print("🎨 [5/7] Generating images...", flush=True)
+    if _skip_llm(state):
         state["want_t2i"] = True
     _unload_llm_weights()
     _unload_vlm_weights()
@@ -355,17 +348,24 @@ def generate_images(state):
         reset_flux_generator()
     wake_image_backend()
     generator = get_flux_generator()
-    if state.get("want_direct"):
-        prompt = _user_t2i_prompt(state)
-        if not prompt:
-            raise ValueError("direct T2I needs a prompt in scene or description")
+    if _skip_llm(state):
+        from models.prompt_spec import user_kandinsky_prompt
         from models.media import output_ext_for
         from models.diffusion.config import load_diffusion_config
 
+        pjson, prompt = user_kandinsky_prompt(
+            str(state.get("scene_prompt") or ""),
+            str(state.get("product_description") or ""),
+            state.get("scene_spec"),
+            as_json=bool(state.get("want_json_prompt")),
+        )
+        if not prompt:
+            raise ValueError("user prompt T2I needs scene or description")
         out_dir = Path(load_diffusion_config()["output_dir"])
         out_dir.mkdir(parents=True, exist_ok=True)
         output_path = str(out_dir / f"00_direct{output_ext_for('')}")
-        print(f"   direct T2I prompt ({len(prompt)} chars): {prompt[:200]}")
+        print(f"   user T2I json={json.dumps(pjson, ensure_ascii=False)[:240]}", flush=True)
+        print(f"   user T2I prompt ({len(prompt)} chars): {prompt[:200]}", flush=True)
         image_path = generator.backend.generate(
             prompt=prompt,
             output_path=output_path,
@@ -375,7 +375,7 @@ def generate_images(state):
         result = ImageGenerationResult(
             image_path=image_path,
             prompt=prompt,
-            prompt_json={"scene": prompt},
+            prompt_json=pjson,
             model="kandinsky5_t2i",
             seed=0,
         )
@@ -416,7 +416,7 @@ def evaluate_images(state):
     use_vlm = bool(rank_cfg.get("vlm_judge"))
     use_dino = bool(rank_cfg.get("dino"))
     use_cer = bool(rank_cfg.get("cer"))
-    if state.get("want_direct"):
+    if _skip_llm(state):
         use_vlm = False
         use_cer = False
     ocr_lang = str(rank_cfg.get("ocr_lang") or "rus+eng")
@@ -728,7 +728,7 @@ def human_gate(state):
 
 def human_router(state):
     action = str(state.get("human_action") or "continue")
-    if action == "retry" and state.get("want_direct"):
+    if action == "retry" and _skip_llm(state):
         return "direct_retry"
     if action in {"continue", "retry", "end"}:
         return action
@@ -744,7 +744,7 @@ def quality_router(state):
     results = state.get("evaluation_results") or []
     if not results:
         return "end"
-    if state.get("want_direct"):
+    if _skip_llm(state):
         return "end"
 
     best_score = max(float(item.get("score", 0.0) or 0.0) for item in results)

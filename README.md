@@ -43,7 +43,7 @@ IDs below are the **current `config.yaml` CUDA / MLX defaults**. Change them the
 | Role | When | CUDA | Apple Silicon (MLX) |
 | --- | --- | --- | --- |
 | Product analysis | Stage 1 | `Qwen/Qwen2.5-VL-32B-Instruct` | `mlx-community/Qwen2-VL-2B-Instruct-4bit` |
-| Concepts, concept scoring, prompt refine, improve | Stages 2–4, retry | `Qwen/Qwen2.5-32B-Instruct` | `mlx-community/Qwen2.5-3B-Instruct-4bit` |
+| Concepts, concept scoring, prompt refine, improve | Stages 2–4, retry | `Qwen/Qwen2.5-7B-Instruct` | `mlx-community/Qwen2.5-3B-Instruct-4bit` |
 | VLM-as-judge | Stage 6 if `ranking.vlm_judge: true` | **same VLM instance** as analysis | same 2B MLX VLM |
 | CLIP-T / CLIP-I / aesthetic | Stage 6 | `openai/clip-vit-large-patch14` + LAION aesthetic MLP | same |
 | DINO-I | Stage 6 | `facebook/dinov2-small` | same |

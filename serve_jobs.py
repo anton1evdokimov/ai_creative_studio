@@ -55,6 +55,7 @@ def attach_job_inputs(
     want_video: bool = False,
     want_t2i: bool = False,
     want_direct: bool = False,
+    want_json_prompt: bool = False,
 ) -> None:
     job = get_job(jid)
     if job is None:
@@ -65,6 +66,7 @@ def attach_job_inputs(
     job["want_video"] = want_video
     job["want_t2i"] = want_t2i
     job["want_direct"] = want_direct
+    job["want_json_prompt"] = want_json_prompt
     _persist(jid)
 
 
@@ -75,6 +77,7 @@ def run_exclusive(jid: str, fn: Callable[[], dict | None]) -> None:
     with _lock:
         job["status"] = "running"
         _persist(jid)
+        print(f"🧵 job {jid} running", flush=True)
         try:
             result = fn()
             if isinstance(result, dict) and result.get("_paused"):

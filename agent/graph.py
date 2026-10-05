@@ -86,7 +86,7 @@ def build_graph(checkpointer=None, db_path: str | None = None):
     workflow.set_entry_point("entry")
     workflow.add_conditional_edges(
         "entry",
-        lambda s: "generation" if s.get("want_direct") else "analysis",
+        lambda s: "generation" if s.get("want_direct") or s.get("want_json_prompt") else "analysis",
         {"generation": "generation", "analysis": "analysis"},
     )
     workflow.add_edge("analysis", "planning")

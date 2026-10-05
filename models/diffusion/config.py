@@ -179,7 +179,7 @@ def load_llm_config() -> dict:
     vlm_cfg = data.get("vlm") or {}
     defaults = {
         "mlx_model": "mlx-community/Qwen2.5-3B-Instruct-4bit",
-        "cuda_model": "Qwen/Qwen2.5-32B-Instruct",
+        "cuda_model": "Qwen/Qwen2.5-7B-Instruct",
         "mlx_vlm_model": vlm_cfg.get("mlx_vlm_model") if isinstance(vlm_cfg, dict) else "mlx-community/Qwen2-VL-2B-Instruct-4bit",
         "max_tokens": 1200,
         "temperature": 0.7,

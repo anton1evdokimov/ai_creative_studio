@@ -95,6 +95,11 @@ def main() -> int:
         action="store_true",
         help="Feed --scene/--description straight to Kandinsky T2I (no LLM)",
     )
+    parser.add_argument(
+        "--json-prompt",
+        action="store_true",
+        help="Build Kandinsky JSON from --scene/--description and send that JSON (no LLM)",
+    )
     args = parser.parse_args()
 
     print(BANNER)
@@ -102,13 +107,15 @@ def main() -> int:
     t0 = time.time()
     from models.prompt_spec import parse_scene_prompt
 
+    want_json_prompt = bool(args.json_prompt)
     want_direct = bool(args.direct)
-    want_t2i = bool(args.t2i) or want_direct
+    want_t2i = bool(args.t2i) or want_direct or want_json_prompt
     if want_t2i:
         if not (args.description or args.scene).strip():
             raise SystemExit("T2I needs --description or --scene")
         product_image = ""
-        print("📷 T2I — no product image (Kandinsky 5 T2I Lite)" + (" · direct prompt" if want_direct else ""))
+        extra = " · json prompt" if want_json_prompt else (" · direct prompt" if want_direct else "")
+        print("📷 T2I — no product image (Kandinsky 5 T2I Lite)" + extra)
     else:
         product_image = str(resolve_product_image(args.image))
         print(f"📷 Product image: {product_image}")
@@ -121,6 +128,7 @@ def main() -> int:
         "want_video": args.video,
         "want_t2i": want_t2i,
         "want_direct": want_direct,
+        "want_json_prompt": want_json_prompt,
         "retry_count": 0,
     }
 

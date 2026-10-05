@@ -52,10 +52,11 @@ label.chk input{width:auto;margin:0}
 <textarea name="scene" rows="8" placeholder='{"scene":"rustic wooden table, morning light","lighting":"soft window light from the left","mood":"warm"}'></textarea>
 <label class="chk"><input type="checkbox" name="t2i" value="1"> Только промпт (Kandinsky 5 T2I, без фото)</label>
 <label class="chk"><input type="checkbox" name="direct" value="1"> Свой промпт сразу в Kandinsky (без LLM)</label>
+<label class="chk"><input type="checkbox" name="json_prompt" value="1"> JSON из моего промпта (без LLM, в Kandinsky как JSON)</label>
 <label class="chk"><input type="checkbox" name="video" value="1"> Генерировать видео</label>
 <button type="submit" id="go">Сгенерировать</button>
 <button type="button" id="restart" class="secondary">Перезапустить генерацию</button>
-<p class="hint">«Свой промпт» — текст из поля сцены (или описания) идёт в T2I как есть, без концептов и refine.</p>
+<p class="hint">JSON-галка: сцена/описание → JSON (scene, product, lighting…) и этот JSON уходит в T2I. Текст без скобок кладётся в scene.</p>
 </form>
 </div>
 <script>
@@ -66,11 +67,12 @@ async function startJob() {
   const my = ++pollGen;
   const t2i = form.querySelector('[name=t2i]').checked;
   const direct = form.querySelector('[name=direct]').checked;
+  const jsonp = form.querySelector('[name=json_prompt]').checked;
   const hasFile = form.querySelector('[name=image]').files.length > 0;
   const txt = (form.description.value || "") + (form.scene.value || "");
-  if (direct && !txt.trim()) { alert("Для своего промпта нужны сцена или описание"); return; }
-  if (!t2i && !direct && !hasFile) { alert("Нужно фото, T2I или свой промпт"); return; }
-  if (t2i && !direct && !txt.trim()) { alert("Для T2I нужны описание или сцена"); return; }
+  if ((direct || jsonp) && !txt.trim()) { alert("Нужны сцена или описание"); return; }
+  if (!t2i && !direct && !jsonp && !hasFile) { alert("Нужно фото, T2I или свой промпт"); return; }
+  if (t2i && !direct && !jsonp && !txt.trim()) { alert("Для T2I нужны описание или сцена"); return; }
   go.disabled = true;
   go.textContent = "В очереди…";
   const fd = new FormData(form);
@@ -264,12 +266,13 @@ def _run_graph(
     jid: str = "cli",
     want_t2i: bool = False,
     want_direct: bool = False,
+    want_json_prompt: bool = False,
 ) -> dict:
     if _graph is None:
         raise RuntimeError("Graph not ready")
     spec = parse_scene_prompt(scene)
     config = _graph_config(jid)
-    if want_direct:
+    if want_direct or want_json_prompt:
         want_t2i = True
     inputs = {
         "product_image": image_path,
@@ -279,8 +282,13 @@ def _run_graph(
         "want_video": bool(want_video),
         "want_t2i": bool(want_t2i),
         "want_direct": bool(want_direct),
+        "want_json_prompt": bool(want_json_prompt),
         "retry_count": 0,
     }
+    print(
+        f"🧵 job {jid} invoke t2i={want_t2i} direct={want_direct} json={want_json_prompt} video={want_video}",
+        flush=True,
+    )
     try:
         result = _graph.invoke(inputs, config)
     except Exception:
@@ -369,11 +377,13 @@ async def create_pipeline_job(
     video: str = Form(""),
     t2i: str = Form(""),
     direct: str = Form(""),
+    json_prompt: str = Form(""),
 ):
     if _graph is None:
         raise HTTPException(503, "Graph not ready")
+    want_json_prompt = str(json_prompt).lower() in {"1", "true", "on", "yes"}
     want_direct = str(direct).lower() in {"1", "true", "on", "yes"}
-    want_t2i = want_direct or str(t2i).lower() in {"1", "true", "on", "yes"}
+    want_t2i = want_direct or want_json_prompt or str(t2i).lower() in {"1", "true", "on", "yes"}
     want_video = str(video).lower() in {"1", "true", "on", "yes"}
     has_file = image is not None and bool(image.filename)
     if want_t2i:
@@ -392,10 +402,10 @@ async def create_pipeline_job(
     jid = create_job()
     desc = description
     scene_txt = scene
-    attach_job_inputs(jid, path, desc, scene_txt, want_video, want_t2i, want_direct)
+    attach_job_inputs(jid, path, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
 
     def work():
-        raw = _run_graph(path, desc, scene_txt, want_video, jid, want_t2i, want_direct)
+        raw = _run_graph(path, desc, scene_txt, want_video, jid, want_t2i, want_direct, want_json_prompt)
         if isinstance(raw, dict) and raw.get("_paused"):
             return raw
         return _payload(raw, jid)
@@ -428,18 +438,19 @@ def rerun_job(jid: str):
         raise HTTPException(404, "unknown job")
     want_t2i = bool(old.get("want_t2i"))
     want_direct = bool(old.get("want_direct"))
+    want_json_prompt = bool(old.get("want_json_prompt"))
     path = str(old.get("image_path") or "")
     desc = str(old.get("description") or "")
     scene_txt = str(old.get("scene") or "")
     want_video = bool(old.get("want_video"))
-    if not want_t2i and not want_direct:
+    if not want_t2i and not want_direct and not want_json_prompt:
         if not path or not Path(path).is_file():
             raise HTTPException(400, "source image no longer on disk")
     new_id = create_job()
-    attach_job_inputs(new_id, path, desc, scene_txt, want_video, want_t2i, want_direct)
+    attach_job_inputs(new_id, path, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
 
     def work():
-        raw = _run_graph(path, desc, scene_txt, want_video, new_id, want_t2i, want_direct)
+        raw = _run_graph(path, desc, scene_txt, want_video, new_id, want_t2i, want_direct, want_json_prompt)
         if isinstance(raw, dict) and raw.get("_paused"):
             return raw
         return _payload(raw, new_id)
@@ -494,10 +505,17 @@ async def generate(
     video: str = Form(""),
     t2i: str = Form(""),
     direct: str = Form(""),
+    json_prompt: str = Form(""),
 ):
     """Enqueue on GPU (same as POST /jobs). Sync wait is not used — one GPU lock is inside the worker."""
     return await create_pipeline_job(
-        image=image, description=description, scene=scene, video=video, t2i=t2i, direct=direct
+        image=image,
+        description=description,
+        scene=scene,
+        video=video,
+        t2i=t2i,
+        direct=direct,
+        json_prompt=json_prompt,
     )
 
 
