@@ -45,15 +45,17 @@ label.chk input{width:auto;margin:0}
 <div class="card">
 <form id="f" action="/generate" method="post" enctype="multipart/form-data">
 <label>Фото продукта</label>
-<input type="file" name="image" accept="image/*" required>
+<input type="file" name="image" accept="image/*">
 <label>Описание продукта (необязательно)</label>
 <input type="text" name="description" placeholder="кефир, худи, сыворотка…">
 <label>Промпт сцены (JSON или текст)</label>
 <textarea name="scene" rows="8" placeholder='{"scene":"rustic wooden table, morning light","lighting":"soft window light from the left","mood":"warm"}'></textarea>
+<label class="chk"><input type="checkbox" name="t2i" value="1"> Только промпт (Kandinsky 5 T2I, без фото)</label>
+<label class="chk"><input type="checkbox" name="direct" value="1"> Свой промпт сразу в Kandinsky (без LLM)</label>
 <label class="chk"><input type="checkbox" name="video" value="1"> Генерировать видео</label>
 <button type="submit" id="go">Сгенерировать</button>
 <button type="button" id="restart" class="secondary">Перезапустить генерацию</button>
-<p class="hint">Сцена: JSON с полями scene, lighting, camera, style, mood — или одна строка. Запрос в очередь GPU. Перезапуск — те же фото, описание и сцена.</p>
+<p class="hint">«Свой промпт» — текст из поля сцены (или описания) идёт в T2I как есть, без концептов и refine.</p>
 </form>
 </div>
 <script>
@@ -62,6 +64,13 @@ const form = document.getElementById("f");
 const go = document.getElementById("go");
 async function startJob() {
   const my = ++pollGen;
+  const t2i = form.querySelector('[name=t2i]').checked;
+  const direct = form.querySelector('[name=direct]').checked;
+  const hasFile = form.querySelector('[name=image]').files.length > 0;
+  const txt = (form.description.value || "") + (form.scene.value || "");
+  if (direct && !txt.trim()) { alert("Для своего промпта нужны сцена или описание"); return; }
+  if (!t2i && !direct && !hasFile) { alert("Нужно фото, T2I или свой промпт"); return; }
+  if (t2i && !direct && !txt.trim()) { alert("Для T2I нужны описание или сцена"); return; }
   go.disabled = true;
   go.textContent = "В очереди…";
   const fd = new FormData(form);
@@ -253,17 +262,23 @@ def _run_graph(
     scene: str = "",
     want_video: bool = False,
     jid: str = "cli",
+    want_t2i: bool = False,
+    want_direct: bool = False,
 ) -> dict:
     if _graph is None:
         raise RuntimeError("Graph not ready")
     spec = parse_scene_prompt(scene)
     config = _graph_config(jid)
+    if want_direct:
+        want_t2i = True
     inputs = {
         "product_image": image_path,
         "product_description": description,
         "scene_prompt": scene,
         "scene_spec": spec,
         "want_video": bool(want_video),
+        "want_t2i": bool(want_t2i),
+        "want_direct": bool(want_direct),
         "retry_count": 0,
     }
     try:
@@ -348,27 +363,39 @@ document.querySelectorAll("button[data-a]").forEach(btn => btn.onclick = async (
 
 @app.post("/jobs")
 async def create_pipeline_job(
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(None),
     description: str = Form(""),
     scene: str = Form(""),
     video: str = Form(""),
+    t2i: str = Form(""),
+    direct: str = Form(""),
 ):
     if _graph is None:
         raise HTTPException(503, "Graph not ready")
-    dest = INPUT_DIR / uuid.uuid4().hex[:12]
-    try:
-        dest = ingest_image_bytes(await image.read(), image.filename or "product.png", dest)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    want_direct = str(direct).lower() in {"1", "true", "on", "yes"}
+    want_t2i = want_direct or str(t2i).lower() in {"1", "true", "on", "yes"}
+    want_video = str(video).lower() in {"1", "true", "on", "yes"}
+    has_file = image is not None and bool(image.filename)
+    if want_t2i:
+        if not (description or scene).strip():
+            raise HTTPException(400, "T2I needs description or scene prompt")
+        path = ""
+    else:
+        if not has_file:
+            raise HTTPException(400, "upload a product photo or enable T2I")
+        dest = INPUT_DIR / uuid.uuid4().hex[:12]
+        try:
+            dest = ingest_image_bytes(await image.read(), image.filename or "product.png", dest)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        path = str(dest)
     jid = create_job()
     desc = description
     scene_txt = scene
-    want_video = str(video).lower() in {"1", "true", "on", "yes"}
-    path = str(dest)
-    attach_job_inputs(jid, path, desc, scene_txt, want_video)
+    attach_job_inputs(jid, path, desc, scene_txt, want_video, want_t2i, want_direct)
 
     def work():
-        raw = _run_graph(path, desc, scene_txt, want_video, jid)
+        raw = _run_graph(path, desc, scene_txt, want_video, jid, want_t2i, want_direct)
         if isinstance(raw, dict) and raw.get("_paused"):
             return raw
         return _payload(raw, jid)
@@ -397,19 +424,22 @@ def job_status(jid: str, view: str = ""):
 @app.post("/jobs/{jid}/rerun")
 def rerun_job(jid: str):
     old = get_job(jid)
-    if old is None or not old.get("image_path"):
+    if old is None:
         raise HTTPException(404, "unknown job")
-    path = str(old["image_path"])
+    want_t2i = bool(old.get("want_t2i"))
+    want_direct = bool(old.get("want_direct"))
+    path = str(old.get("image_path") or "")
     desc = str(old.get("description") or "")
     scene_txt = str(old.get("scene") or "")
     want_video = bool(old.get("want_video"))
-    if not Path(path).is_file():
-        raise HTTPException(400, "source image no longer on disk")
+    if not want_t2i and not want_direct:
+        if not path or not Path(path).is_file():
+            raise HTTPException(400, "source image no longer on disk")
     new_id = create_job()
-    attach_job_inputs(new_id, path, desc, scene_txt, want_video)
+    attach_job_inputs(new_id, path, desc, scene_txt, want_video, want_t2i, want_direct)
 
     def work():
-        raw = _run_graph(path, desc, scene_txt, want_video, new_id)
+        raw = _run_graph(path, desc, scene_txt, want_video, new_id, want_t2i, want_direct)
         if isinstance(raw, dict) and raw.get("_paused"):
             return raw
         return _payload(raw, new_id)
@@ -458,13 +488,17 @@ async def resume_job(jid: str, request: Request):
 @app.post("/generate")
 async def generate(
     request: Request,
-    image: UploadFile = File(...),
+    image: UploadFile | None = File(None),
     description: str = Form(""),
     scene: str = Form(""),
     video: str = Form(""),
+    t2i: str = Form(""),
+    direct: str = Form(""),
 ):
     """Enqueue on GPU (same as POST /jobs). Sync wait is not used — one GPU lock is inside the worker."""
-    return await create_pipeline_job(image=image, description=description, scene=scene, video=video)
+    return await create_pipeline_job(
+        image=image, description=description, scene=scene, video=video, t2i=t2i, direct=direct
+    )
 
 
 @app.get("/files")

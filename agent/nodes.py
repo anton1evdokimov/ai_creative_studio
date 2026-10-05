@@ -6,15 +6,16 @@ from models.diffusion.config import load_pipeline_config, load_diffusion_config,
 from models.llm.factory import create_llm, park_llm, unload_llm
 from models.llm.parser import parse_concepts, parse_concept_score
 from models.diffusion.generator import get_flux_generator, reset_flux_generator
-from models.diffusion.factory import park_image_backend, unload_image_backend, wake_image_backend
+from models.diffusion.factory import park_image_backend, set_t2i_mode, unload_image_backend, wake_image_backend
 from models.vlm.analyzer import create_product_analyzer, reset_product_analyzer
 from models.vlm.factory import park_vlm, unload_vlm
 from models.ranking.clip import create_image_scorer, reset_image_scorer
 from models.ranking.clip_metrics import create_clip_metrics, unload_clip_metrics
 from models.ranking.quality import analyze_quality
 from agent.refine_prompts import create_prompt_refiner, reset_prompt_refiner
-from schemas.creative import ScoredConcept
+from schemas.creative import CreativeConcept, ScoredConcept
 from schemas.evaluation import ImageEvaluation
+from schemas.generation import ImageGenerationResult, RefinedPrompt
 
 _llm = None
 
@@ -102,12 +103,20 @@ def analyze_product(state):
     desc = state.get("product_description", "") or ""
     img = state.get("product_image", "") or ""
 
-    analyzer = create_product_analyzer()
-    analysis_obj = analyzer.analyze(
-        image_path=img or "",   # empty string triggers safe text-only fallback
-        user_description=desc,
-        fallback_if_missing_image=True,
-    )
+    if state.get("want_t2i") and not img:
+        from models.prompt_spec import flatten_prompt_json
+        from models.vlm.analyzer import ProductAnalyzer
+
+        hint = desc or flatten_prompt_json(state.get("scene_spec")) or str(state.get("scene_prompt") or "product")
+        print("   T2I — skip VLM (no packshot)")
+        analysis_obj = ProductAnalyzer._text_only_fallback(hint)
+    else:
+        analyzer = create_product_analyzer()
+        analysis_obj = analyzer.analyze(
+            image_path=img or "",
+            user_description=desc,
+            fallback_if_missing_image=True,
+        )
 
     # legacy dict view
     analysis_dict: dict[str, Any] = {}
@@ -325,12 +334,56 @@ def refine_prompts(state):
     return state
 
 
+def _user_t2i_prompt(state) -> str:
+    scene = str(state.get("scene_prompt") or "").strip()
+    desc = str(state.get("product_description") or "").strip()
+    if scene.startswith("{"):
+        from models.prompt_spec import flatten_prompt_json
+
+        flat = flatten_prompt_json(state.get("scene_spec") or {})
+        return (flat or scene).strip()
+    return scene or desc
+
+
 def generate_images(state):
     print("🎨 [5/7] Generating images...")
+    if state.get("want_direct"):
+        state["want_t2i"] = True
     _unload_llm_weights()
     _unload_vlm_weights()
+    if set_t2i_mode(bool(state.get("want_t2i"))):
+        reset_flux_generator()
     wake_image_backend()
     generator = get_flux_generator()
+    if state.get("want_direct"):
+        prompt = _user_t2i_prompt(state)
+        if not prompt:
+            raise ValueError("direct T2I needs a prompt in scene or description")
+        from models.media import output_ext_for
+        from models.diffusion.config import load_diffusion_config
+
+        out_dir = Path(load_diffusion_config()["output_dir"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(out_dir / f"00_direct{output_ext_for('')}")
+        print(f"   direct T2I prompt ({len(prompt)} chars): {prompt[:200]}")
+        image_path = generator.backend.generate(
+            prompt=prompt,
+            output_path=output_path,
+            seed=0,
+            verbatim=True,
+        )
+        result = ImageGenerationResult(
+            image_path=image_path,
+            prompt=prompt,
+            prompt_json={"scene": prompt},
+            model="kandinsky5_t2i",
+            seed=0,
+        )
+        state["generated_images"] = [image_path]
+        state["generation_results"] = [result]
+        _unload_flux_weights()
+        return state
+
     concepts = state.get("ranked_concepts") or state.get("creative_concepts", [])
     refined = state.get("refined_prompts") or None
     pa = state.get("product_analysis") or {}
@@ -363,12 +416,19 @@ def evaluate_images(state):
     use_vlm = bool(rank_cfg.get("vlm_judge"))
     use_dino = bool(rank_cfg.get("dino"))
     use_cer = bool(rank_cfg.get("cer"))
+    if state.get("want_direct"):
+        use_vlm = False
+        use_cer = False
     ocr_lang = str(rank_cfg.get("ocr_lang") or "rus+eng")
     weights = rank_cfg.get("weights") or {}
 
     diff_cfg = load_diffusion_config()
     target_w = int(diff_cfg.get("width", 512))
     target_h = int(diff_cfg.get("height", 512))
+    if state.get("want_t2i"):
+        k5 = diff_cfg.get("kandinsky") if isinstance(diff_cfg.get("kandinsky"), dict) else {}
+        target_w = int(k5.get("t2i_width") or 1024)
+        target_h = int(k5.get("t2i_height") or 1024)
     product_image = state.get("product_image") or ""
 
     pa = state.get("product_analysis") or {}
@@ -498,7 +558,7 @@ def evaluate_images(state):
         except Exception as exc:
             print(f"⚠️  DINOv2 skipped: {type(exc).__name__}: {exc}")
 
-    if use_cer and rows:
+    if use_cer and rows and product_image and not state.get("want_t2i"):
         try:
             from models.ranking.cer import score_cer
 
@@ -668,6 +728,8 @@ def human_gate(state):
 
 def human_router(state):
     action = str(state.get("human_action") or "continue")
+    if action == "retry" and state.get("want_direct"):
+        return "direct_retry"
     if action in {"continue", "retry", "end"}:
         return action
     return "continue"
@@ -681,6 +743,8 @@ def quality_router(state):
 
     results = state.get("evaluation_results") or []
     if not results:
+        return "end"
+    if state.get("want_direct"):
         return "end"
 
     best_score = max(float(item.get("score", 0.0) or 0.0) for item in results)

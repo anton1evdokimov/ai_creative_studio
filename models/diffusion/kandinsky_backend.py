@@ -52,6 +52,7 @@ def _to_pil(out) -> Image.Image:
 
 
 K5_I2I_DEFAULT = "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers"
+K5_T2I_DEFAULT = "kandinskylab/Kandinsky-5.0-T2I-Lite-sft-Diffusers"
 K5_SIZES = (
     (1024, 1024),
     (640, 1408),
@@ -217,5 +218,71 @@ class Kandinsky5Backend(ImageBackend):
 
         pil = _to_pil(out)
         save_rgb(pil, output_path)
+        torch.cuda.empty_cache()
+        return output_path
+
+
+class Kandinsky5T2IBackend(ImageBackend):
+    """Kandinsky 5.0 T2I Lite SFT — prompt only, no packshot."""
+
+    def __init__(self, config: dict):
+        if not torch.cuda.is_available():
+            raise RuntimeError("Kandinsky 5 T2I needs CUDA.")
+        self.config = config
+        self.pipe = self._load()
+
+    def _load(self):
+        try:
+            from diffusers import Kandinsky5T2IPipeline
+        except ImportError as exc:
+            raise RuntimeError(
+                "diffusers has no Kandinsky5T2IPipeline — upgrade: pip install -U diffusers"
+            ) from exc
+
+        k5 = _k5_cfg(self.config)
+        model_id = str(k5.get("t2i_model") or K5_T2I_DEFAULT)
+        print(f"Loading Kandinsky 5 T2I ({model_id}) on cuda")
+        pipe = Kandinsky5T2IPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+        if hasattr(pipe, "enable_model_cpu_offload"):
+            pipe.enable_model_cpu_offload()
+        else:
+            pipe.to("cuda")
+        return pipe
+
+    def generate(
+        self,
+        prompt: str,
+        output_path: str,
+        seed: int | None = None,
+        negative_prompt: str | None = None,
+        **extra,
+    ) -> str:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        k5 = _k5_cfg(self.config)
+        w = int(k5.get("t2i_width") or 1024)
+        h = int(k5.get("t2i_height") or 1024)
+        w, h = _snap_hw(w, h)
+        generator = None
+        if seed is not None:
+            generator = torch.Generator("cpu").manual_seed(int(seed))
+        if extra.get("verbatim"):
+            prompt = " ".join((prompt or "").split())
+        else:
+            prompt = _compact_k5_prompt(prompt, max_chars=720)
+        kwargs = dict(
+            prompt=prompt,
+            height=h,
+            width=w,
+            num_inference_steps=int(k5.get("num_inference_steps") or 50),
+            guidance_scale=float(k5.get("guidance_scale") or 3.5),
+            generator=generator,
+        )
+        if negative_prompt:
+            kwargs["negative_prompt"] = _compact_k5_prompt(negative_prompt, max_chars=320)
+        print(f"   Kandinsky5 T2I  {w}x{h}  steps={kwargs['num_inference_steps']}")
+        out = self.pipe(**kwargs)
+        from models.media import save_rgb
+
+        save_rgb(_to_pil(out), output_path)
         torch.cuda.empty_cache()
         return output_path

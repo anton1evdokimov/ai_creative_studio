@@ -58,6 +58,7 @@ Diffusion (`diffusion.backend`) is independent:
 | `sdxl_inpaint` | SDXL inpaint: keep product pixels, generate background (`diffusers/stable-diffusion-xl-1.0-inpainting-0.1`) |
 | `sdxl` | SDXL T2I; optional ControlNet + IP-Adapter Plus |
 | `kandinsky5` | Kandinsky 5 **img2img** (latent from the photo) |
+| `kandinsky5_t2i` / UI «только промпт» | Kandinsky 5 **T2I** Lite SFT (`Kandinsky5T2IPipeline`, 1024², 50 steps, gs 3.5). No packshot; CLIP-I / DINO / CER skipped. |
 | `flux2` | FLUX.2 Klein: packshot as **visual tokens** next to the text prompt (not I2I) |
 
 ---

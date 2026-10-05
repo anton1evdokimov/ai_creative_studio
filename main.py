@@ -85,22 +85,42 @@ def main() -> int:
         default=None,
         help="Generate video after stills (default: config video.enabled)",
     )
+    parser.add_argument(
+        "--t2i",
+        action="store_true",
+        help="Kandinsky 5 T2I from --scene/--description, no product photo",
+    )
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Feed --scene/--description straight to Kandinsky T2I (no LLM)",
+    )
     args = parser.parse_args()
 
     print(BANNER)
 
     t0 = time.time()
-    product_image = resolve_product_image(args.image)
-    print(f"📷 Product image: {product_image}")
-
     from models.prompt_spec import parse_scene_prompt
 
+    want_direct = bool(args.direct)
+    want_t2i = bool(args.t2i) or want_direct
+    if want_t2i:
+        if not (args.description or args.scene).strip():
+            raise SystemExit("T2I needs --description or --scene")
+        product_image = ""
+        print("📷 T2I — no product image (Kandinsky 5 T2I Lite)" + (" · direct prompt" if want_direct else ""))
+    else:
+        product_image = str(resolve_product_image(args.image))
+        print(f"📷 Product image: {product_image}")
+
     input_data = {
-        "product_image": str(product_image),
+        "product_image": product_image,
         "product_description": args.description,
         "scene_prompt": args.scene,
         "scene_spec": parse_scene_prompt(args.scene),
         "want_video": args.video,
+        "want_t2i": want_t2i,
+        "want_direct": want_direct,
         "retry_count": 0,
     }
 

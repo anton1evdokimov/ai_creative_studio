@@ -61,6 +61,9 @@ diffusion:
     canvas: landscape                         # product | landscape | square
   kandinsky:
     model: kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers
+    t2i_model: kandinskylab/Kandinsky-5.0-T2I-Lite-sft-Diffusers
+    t2i_width: 1024
+    t2i_height: 1024
     num_inference_steps: 50
     guidance_scale: 3.5
     width: 768

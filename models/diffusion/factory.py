@@ -1,10 +1,29 @@
 import os
 import platform
 
-from .config import is_flux2_model, is_kandinsky_model, is_sdxl_model, load_diffusion_config
+from .config import (
+    is_flux2_model,
+    is_kandinsky_model,
+    is_kandinsky_t2i,
+    is_sdxl_model,
+    load_diffusion_config,
+)
 
 
 _backend = None
+_t2i = False
+
+
+def set_t2i_mode(enabled: bool) -> bool:
+    """Force Kandinsky 5 T2I for this process. Returns True if backend must be rebuilt."""
+    global _t2i, _backend
+    enabled = bool(enabled)
+    if enabled == _t2i:
+        return False
+    _t2i = enabled
+    if _backend is not None:
+        unload_image_backend()
+    return True
 
 
 def _use_mock() -> bool:
@@ -26,13 +45,22 @@ def create_image_backend():
         return _backend
 
     config = load_diffusion_config()
+    backend = str(config.get("backend") or "")
+    model = str(config.get("model") or "")
 
     if _use_mock():
         from .mock_backend import MockImageBackend
         _backend = MockImageBackend(config)
         return _backend
 
-    if inpaint_on := str(config.get("backend") or "").lower() in {"sdxl_inpaint", "inpaint"}:
+    if _t2i or is_kandinsky_t2i(model, backend):
+        print("🚀 Using Kandinsky 5 T2I backend")
+        from .kandinsky_backend import Kandinsky5T2IBackend
+
+        _backend = Kandinsky5T2IBackend(config)
+        return _backend
+
+    if str(config.get("backend") or "").lower() in {"sdxl_inpaint", "inpaint"}:
         print("🚀 Using SDXL inpaint backend")
         from .sdxl_inpaint_backend import SDXLInpaintBackend
 

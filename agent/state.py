@@ -16,6 +16,8 @@ class PipelineState(TypedDict, total=False):
     scene_prompt: str
     scene_spec: Dict[str, Any]
     want_video: bool
+    want_t2i: bool
+    want_direct: bool
 
     # ---- STAGE 1: ANALYSIS (VLM) ----
     product_analysis: Dict[str, Any]        # legacy dict view

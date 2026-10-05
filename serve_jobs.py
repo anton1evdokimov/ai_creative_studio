@@ -48,7 +48,13 @@ def get_job(jid: str) -> dict[str, Any] | None:
 
 
 def attach_job_inputs(
-    jid: str, image_path: str, description: str, scene: str = "", want_video: bool = False
+    jid: str,
+    image_path: str,
+    description: str,
+    scene: str = "",
+    want_video: bool = False,
+    want_t2i: bool = False,
+    want_direct: bool = False,
 ) -> None:
     job = get_job(jid)
     if job is None:
@@ -57,6 +63,8 @@ def attach_job_inputs(
     job["description"] = description
     job["scene"] = scene
     job["want_video"] = want_video
+    job["want_t2i"] = want_t2i
+    job["want_direct"] = want_direct
     _persist(jid)
 
 

@@ -72,6 +72,7 @@ def _checkpointer(db_path: str | None = None):
 def build_graph(checkpointer=None, db_path: str | None = None):
     workflow = StateGraph(PipelineState)
 
+    workflow.add_node("entry", lambda state: state)
     workflow.add_node("analysis", analyze_product)
     workflow.add_node("planning", create_concepts)
     workflow.add_node("scoring", score_prompts)
@@ -82,8 +83,12 @@ def build_graph(checkpointer=None, db_path: str | None = None):
     workflow.add_node("video_generation", generate_video)
     workflow.add_node("improve_prompt", improve_prompt)
 
-    workflow.set_entry_point("analysis")
-
+    workflow.set_entry_point("entry")
+    workflow.add_conditional_edges(
+        "entry",
+        lambda s: "generation" if s.get("want_direct") else "analysis",
+        {"generation": "generation", "analysis": "analysis"},
+    )
     workflow.add_edge("analysis", "planning")
     workflow.add_edge("planning", "scoring")
     workflow.add_edge("scoring", "refine_prompts")
@@ -93,7 +98,12 @@ def build_graph(checkpointer=None, db_path: str | None = None):
     workflow.add_conditional_edges(
         "human_gate",
         human_router,
-        {"continue": "video_generation", "retry": "improve_prompt", "end": END},
+        {
+            "continue": "video_generation",
+            "retry": "improve_prompt",
+            "direct_retry": "generation",
+            "end": END,
+        },
     )
     workflow.add_conditional_edges(
         "video_generation",

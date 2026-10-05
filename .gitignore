@@ -42,3 +42,4 @@ results/
 lora/
 *.safetensors
 *.png
+.env_ai

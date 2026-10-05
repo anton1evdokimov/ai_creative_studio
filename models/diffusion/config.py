@@ -11,6 +11,7 @@ HF_MODELS = {
     "turbo": "stabilityai/sdxl-turbo",
     "kandinsky5": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
     "kandinsky": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
+    "kandinsky5_t2i": "kandinskylab/Kandinsky-5.0-T2I-Lite-sft-Diffusers",
     "flux2": "black-forest-labs/FLUX.2-klein-4B",
     "flux.2": "black-forest-labs/FLUX.2-klein-4B",
 }
@@ -89,6 +90,9 @@ def load_diffusion_config() -> dict:
         "backend": "sdxl",
         "kandinsky": {
             "model": "kandinskylab/Kandinsky-5.0-I2I-Lite-sft-Diffusers",
+            "t2i_model": "kandinskylab/Kandinsky-5.0-T2I-Lite-sft-Diffusers",
+            "t2i_width": 1024,
+            "t2i_height": 1024,
             "num_inference_steps": 50,
             "guidance_scale": 3.5,
             "width": 768,
@@ -250,9 +254,16 @@ def is_flux2_model(model: str, backend: str = "") -> bool:
     return "flux2" in blob or "flux.2" in blob
 
 
+def is_kandinsky_t2i(model: str, backend: str = "") -> bool:
+    blob = f"{backend} {model}".lower().replace(" ", "").replace("-", "_")
+    return "kandinsky5_t2i" in blob or "kandinsky_t2i" in blob or (
+        blob.endswith("t2i") and "kandinsky" in blob
+    )
+
+
 def is_kandinsky_model(model: str, backend: str = "") -> bool:
     blob = f"{backend} {model}".lower()
-    return "kandinsky" in blob
+    return "kandinsky" in blob and not is_kandinsky_t2i(model, backend)
 
 
 def is_sdxl_model(model: str) -> bool:
