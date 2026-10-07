@@ -44,8 +44,8 @@ label.chk input{width:auto;margin:0}
 <h1>AI Creative Studio</h1>
 <div class="card">
 <form id="f" action="/generate" method="post" enctype="multipart/form-data">
-<label>Фото продукта</label>
-<input type="file" name="image" accept="image/*">
+<label>Фото продукта (несколько)</label>
+<input type="file" name="images" accept="image/*" multiple>
 <label>Описание продукта (необязательно)</label>
 <input type="text" name="description" placeholder="кефир, худи, сыворотка…">
 <label>Промпт сцены (JSON или текст)</label>
@@ -56,7 +56,7 @@ label.chk input{width:auto;margin:0}
 <label class="chk"><input type="checkbox" name="video" value="1"> Генерировать видео</label>
 <button type="submit" id="go">Сгенерировать</button>
 <button type="button" id="restart" class="secondary">Перезапустить генерацию</button>
-<p class="hint">JSON-галка: сцена/описание → JSON (scene, product, lighting…) и этот JSON уходит в T2I. Текст без скобок кладётся в scene.</p>
+<p class="hint">Несколько фото сначала кладутся в MinIO, затем дедуп: SHA-256 → pHash → DINOv2 → FAISS. В генерацию идут только уникальные. JSON-галка — без фото, свой текст как JSON в T2I.</p>
 </form>
 </div>
 <script>
@@ -68,7 +68,7 @@ async function startJob() {
   const t2i = form.querySelector('[name=t2i]').checked;
   const direct = form.querySelector('[name=direct]').checked;
   const jsonp = form.querySelector('[name=json_prompt]').checked;
-  const hasFile = form.querySelector('[name=image]').files.length > 0;
+  const hasFile = form.querySelector('[name=images]').files.length > 0;
   const txt = (form.description.value || "") + (form.scene.value || "");
   if ((direct || jsonp) && !txt.trim()) { alert("Нужны сцена или описание"); return; }
   if (!t2i && !direct && !jsonp && !hasFile) { alert("Нужно фото, T2I или свой промпт"); return; }
@@ -125,6 +125,15 @@ def _result_html(payload: dict) -> str:
         if best
         else "<p>Кадры не получились.</p>"
     )
+    dedup = payload.get("dedup") or {}
+    dhtml = ""
+    if dedup:
+        blob = html.escape(json.dumps({
+            "input_count": dedup.get("input_count"),
+            "kept_count": dedup.get("kept_count"),
+            "dropped": dedup.get("dropped") or [],
+        }, ensure_ascii=False, indent=2))
+        dhtml = f"<h2>Дедуп</h2><pre style=\"overflow:auto;background:#111;border:1px solid #333;padding:1rem;border-radius:8px;font-size:.8rem\">{blob}</pre>"
     vids = payload.get("generated_videos") or []
     vhtml = ""
     for v in vids:
@@ -155,6 +164,7 @@ button:disabled{{opacity:.5}}
 <button type="button" id="restart">Перезапустить генерацию</button>
 <a href="/generate"><button type="button" class="secondary">Другое фото</button></a>
 {best_block}
+{dhtml}
 {vhtml}
 {phtml}
 {''.join(cards) or '<p>Нет оценок.</p>'}
@@ -369,8 +379,94 @@ document.querySelectorAll("button[data-a]").forEach(btn => btn.onclick = async (
 """
 
 
+async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes, str]]:
+    rows = []
+    for i, item in enumerate(files):
+        if item is None or not item.filename:
+            continue
+        data = await item.read()
+        if not data:
+            continue
+        rows.append((f"{i:03d}_{Path(item.filename).name}", data, item.content_type or "application/octet-stream"))
+    return rows
+
+
+def _put_uploads(jid: str, rows: list[tuple[str, bytes, str]]) -> str:
+    from models.storage.s3store import put_bytes
+
+    prefix = f"batches/{jid}"
+    for name, data, ctype in rows:
+        put_bytes(f"{prefix}/{name}", data, ctype)
+    return prefix
+
+
+def _materialize(jid: str, keys: list[str]) -> list[str]:
+    from models.storage.s3store import get_bytes
+
+    paths = []
+    for key in keys:
+        dest = INPUT_DIR / jid / Path(key).name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        paths.append(str(ingest_image_bytes(get_bytes(key), Path(key).name, dest)))
+    return paths
+
+
+def _remember_paths(jid: str, paths: list[str]) -> None:
+    job = get_job(jid)
+    if job is None:
+        return
+    job["image_paths"] = paths
+    if paths:
+        job["image_path"] = paths[0]
+
+
+def _merge_runs(jid: str, raws: list[dict], report: dict | None) -> dict:
+    scores, gens, vids, prompts = [], [], [], []
+    best = ""
+    for raw in raws:
+        payload = _payload(raw, jid)
+        scores.extend(payload.get("scores") or [])
+        gens.extend(payload.get("generated_images") or [])
+        vids.extend(payload.get("generated_videos") or [])
+        prompts.extend(payload.get("prompts") or [])
+        if not best and payload.get("best_image"):
+            best = payload["best_image"]
+    if not best and gens:
+        best = gens[0]
+    return {
+        "job": jid,
+        "dedup": report,
+        "best_image": best,
+        "generated_images": gens,
+        "generated_videos": vids,
+        "prompts": prompts,
+        "scores": scores,
+        "scene_spec": {},
+    }
+
+
+def _generate_paths(jid, paths, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt, report=None):
+    _remember_paths(jid, paths)
+    raws = []
+    for i, path in enumerate(paths):
+        raw = _run_graph(path, desc, scene_txt, want_video, f"{jid}-{i}", want_t2i, want_direct, want_json_prompt)
+        if isinstance(raw, dict) and raw.get("_paused"):
+            return raw
+        raws.append(raw if isinstance(raw, dict) else {})
+    if not paths:
+        raw = _run_graph("", desc, scene_txt, want_video, jid, want_t2i, want_direct, want_json_prompt)
+        if isinstance(raw, dict) and raw.get("_paused"):
+            return raw
+        out = _payload(raw if isinstance(raw, dict) else {}, jid)
+        if report:
+            out["dedup"] = report
+        return out
+    return _merge_runs(jid, raws, report)
+
+
 @app.post("/jobs")
 async def create_pipeline_job(
+    images: list[UploadFile] | None = File(None),
     image: UploadFile | None = File(None),
     description: str = Form(""),
     scene: str = Form(""),
@@ -385,33 +481,54 @@ async def create_pipeline_job(
     want_direct = str(direct).lower() in {"1", "true", "on", "yes"}
     want_t2i = want_direct or want_json_prompt or str(t2i).lower() in {"1", "true", "on", "yes"}
     want_video = str(video).lower() in {"1", "true", "on", "yes"}
-    has_file = image is not None and bool(image.filename)
+    uploads = list(images or [])
+    if image is not None and image.filename:
+        uploads.append(image)
+    rows = await _read_uploads(uploads)
+    desc = description
+    scene_txt = scene
     if want_t2i:
         if not (description or scene).strip():
             raise HTTPException(400, "T2I needs description or scene prompt")
-        path = ""
-    else:
-        if not has_file:
-            raise HTTPException(400, "upload a product photo or enable T2I")
-        dest = INPUT_DIR / uuid.uuid4().hex[:12]
-        try:
-            dest = ingest_image_bytes(await image.read(), image.filename or "product.png", dest)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        path = str(dest)
+        jid = create_job()
+        attach_job_inputs(jid, "", desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
+
+        def work_text():
+            return _generate_paths(jid, [], desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
+
+        threading.Thread(target=lambda: run_exclusive(jid, work_text), daemon=True).start()
+        return JSONResponse({"job_id": jid, "status": "queued"}, status_code=202)
+
+    if not rows:
+        raise HTTPException(400, "upload product photos or enable T2I")
     jid = create_job()
-    desc = description
-    scene_txt = scene
-    attach_job_inputs(jid, path, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
+    try:
+        prefix = _put_uploads(jid, rows)
+    except Exception as exc:
+        job = get_job(jid)
+        if job is not None:
+            job["status"] = "error"
+            job["error"] = f"S3/MinIO upload failed: {exc}"
+            from agent.persist import save_job
+
+            save_job(OUTPUT_ROOT, jid, job)
+        raise HTTPException(503, f"S3/MinIO upload failed: {exc}") from exc
+    attach_job_inputs(jid, "", desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
 
     def work():
-        raw = _run_graph(path, desc, scene_txt, want_video, jid, want_t2i, want_direct, want_json_prompt)
-        if isinstance(raw, dict) and raw.get("_paused"):
-            return raw
-        return _payload(raw, jid)
+        from models.dedup.run import deduplicate_prefix, write_report
+
+        report = deduplicate_prefix(prefix)
+        write_report(OUTPUT_ROOT / "dedup" / f"{jid}.json", report)
+        paths = _materialize(jid, [row["key"] for row in report.get("kept") or []])
+        if not paths:
+            raise RuntimeError("dedup kept no images")
+        return _generate_paths(
+            jid, paths, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt, report
+        )
 
     threading.Thread(target=lambda: run_exclusive(jid, work), daemon=True).start()
-    return JSONResponse({"job_id": jid, "status": "queued"}, status_code=202)
+    return JSONResponse({"job_id": jid, "status": "queued", "s3_prefix": prefix}, status_code=202)
 
 
 @app.get("/jobs/{jid}")
@@ -443,17 +560,20 @@ def rerun_job(jid: str):
     desc = str(old.get("description") or "")
     scene_txt = str(old.get("scene") or "")
     want_video = bool(old.get("want_video"))
+    paths = [p for p in (old.get("image_paths") or []) if p]
+    if not paths and path:
+        paths = [path]
     if not want_t2i and not want_direct and not want_json_prompt:
-        if not path or not Path(path).is_file():
+        missing = [p for p in paths if not Path(p).is_file()]
+        if not paths or missing:
             raise HTTPException(400, "source image no longer on disk")
     new_id = create_job()
-    attach_job_inputs(new_id, path, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
+    attach_job_inputs(new_id, paths[0] if paths else "", desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt)
 
     def work():
-        raw = _run_graph(path, desc, scene_txt, want_video, new_id, want_t2i, want_direct, want_json_prompt)
-        if isinstance(raw, dict) and raw.get("_paused"):
-            return raw
-        return _payload(raw, new_id)
+        return _generate_paths(
+            new_id, paths, desc, scene_txt, want_video, want_t2i, want_direct, want_json_prompt, old.get("dedup")
+        )
 
     threading.Thread(target=lambda: run_exclusive(new_id, work), daemon=True).start()
     return JSONResponse({"job_id": new_id, "status": "queued"}, status_code=202)
@@ -499,6 +619,7 @@ async def resume_job(jid: str, request: Request):
 @app.post("/generate")
 async def generate(
     request: Request,
+    images: list[UploadFile] | None = File(None),
     image: UploadFile | None = File(None),
     description: str = Form(""),
     scene: str = Form(""),
@@ -509,6 +630,7 @@ async def generate(
 ):
     """Enqueue on GPU (same as POST /jobs). Sync wait is not used — one GPU lock is inside the worker."""
     return await create_pipeline_job(
+        images=images,
         image=image,
         description=description,
         scene=scene,

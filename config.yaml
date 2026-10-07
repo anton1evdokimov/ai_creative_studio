@@ -139,3 +139,9 @@ ranking:
     heuristics: 0.10
     cer: 0.15
 
+dedup:
+  batch_size: 8
+  phash_max_distance: 8
+  dino_min_cosine: 0.94
+  dino_model: facebook/dinov2-small
+
