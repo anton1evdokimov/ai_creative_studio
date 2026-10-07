@@ -109,6 +109,7 @@ class ProductAnalyzer:
             print(f"   ⚠️ VLM JSON empty/unparsed. Raw: {snippet or '∅'}")
 
         analysis = self._enrich_from_hints(analysis, p, user_description)
+        analysis = self._retry_caption(analysis, p)
         return analysis
 
     # ------------------------------------------------------------------
@@ -221,4 +222,100 @@ class ProductAnalyzer:
             noun = product_noun(analysis, user_description, image_path or "")
             analysis.visual_caption = f"Commercial photo of {noun}."
         return analysis
+
+    def _retry_caption(self, analysis: ProductAnalysis, image_path: Path) -> ProductAnalysis:
+        from models.diffusion.config import load_vlm_config
+
+        cfg = load_vlm_config()
+        metric = str(cfg.get("caption_metric") or "clip").lower()
+        threshold = float(cfg.get("caption_score_threshold") or 0.35)
+        max_retries = max(0, int(cfg.get("caption_max_retries") or 0))
+        caption = (analysis.visual_caption or "").strip()
+        clipper = None
+        try:
+            for attempt in range(max_retries + 1):
+                vlm_score, suggested = self._judge_caption(image_path, caption)
+                auto = None
+                if metric == "clip":
+                    try:
+                        auto, clipper = self._clip_caption_score(image_path, caption, clipper)
+                    except Exception as exc:
+                        print(f"   caption CLIP skipped ({type(exc).__name__}: {exc})")
+                        auto = None
+                elif metric == "dino":
+                    print("   caption metric=dino skipped (DINOv2 has no text encoder); VLM score only")
+                else:
+                    print(f"   caption metric={metric!r} unknown; VLM score only")
+                auto_ok = auto is None or auto >= threshold
+                ok = vlm_score >= threshold and auto_ok
+                auto_txt = f"{auto:.3f}" if auto is not None else "—"
+                print(
+                    f"   caption try {attempt + 1}/{max_retries + 1} "
+                    f"vlm={vlm_score:.3f} {metric}={auto_txt} thr={threshold:.2f} "
+                    f"{'ok' if ok else 'retry'}: {caption[:120]}"
+                )
+                if ok or attempt >= max_retries:
+                    if suggested and not ok:
+                        caption = suggested
+                    break
+                caption = suggested if suggested and suggested != caption else self._rewrite_caption(image_path, caption)
+        finally:
+            if clipper is not None:
+                from models.ranking.clip_metrics import unload_clip_metrics
+
+                unload_clip_metrics()
+        analysis.visual_caption = caption
+        return analysis
+
+    def _judge_caption(self, image_path: Path, caption: str) -> tuple[float, str]:
+        raw = self.vlm.chat_with_image(
+            image_path,
+            (
+                "Caption to check:\n"
+                f"{caption or '(empty)'}\n\n"
+                "Look at the photo. Score how well this ONE caption matches visible objects, "
+                "colors, packaging and label text. Do not reward invented details.\n"
+                'Return ONLY JSON: {"score": 0.0, "caption": "one accurate sentence"}\n'
+                "score is 0..1. If the caption is already right, repeat it."
+            ),
+            system_prompt="You check image captions. Reply with JSON only.",
+            max_tokens=300,
+            temperature=0.2,
+        )
+        parsed = _safe_json_loads(raw, {})
+        if not isinstance(parsed, dict):
+            parsed = {}
+        try:
+            score = float(parsed.get("score"))
+        except (TypeError, ValueError):
+            score = 0.0
+        score = max(0.0, min(1.0, score))
+        suggested = str(parsed.get("caption") or "").strip()
+        return score, suggested
+
+    def _rewrite_caption(self, image_path: Path, caption: str) -> str:
+        raw = self.vlm.chat_with_image(
+            image_path,
+            (
+                "The previous caption was weak:\n"
+                f"{caption or '(empty)'}\n"
+                'Write a better one. Return ONLY JSON: {"caption": "one sentence"}'
+            ),
+            system_prompt="You write accurate product-photo captions. Reply with JSON only.",
+            max_tokens=200,
+            temperature=0.3,
+        )
+        parsed = _safe_json_loads(raw, {})
+        text = str(parsed.get("caption") or "").strip() if isinstance(parsed, dict) else ""
+        return text or caption
+
+    def _clip_caption_score(self, image_path: Path, caption: str, clipper):
+        from models.diffusion.config import load_ranking_config
+        from models.ranking.clip_metrics import create_clip_metrics
+
+        if clipper is None:
+            rank = load_ranking_config()
+            clipper = create_clip_metrics(rank.get("clip_model") or "openai/clip-vit-large-patch14", use_aesthetic=False)
+        scored = clipper.score(image_path, caption or "a product photograph")
+        return float(scored.clip_t), clipper
 

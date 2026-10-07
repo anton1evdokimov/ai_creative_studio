@@ -194,6 +194,9 @@ def load_vlm_config() -> dict:
         "mlx_vlm_model": "mlx-community/Qwen2-VL-2B-Instruct-4bit",
         "cuda_model": "Qwen/Qwen2.5-VL-32B-Instruct",
         "max_tokens": 1200,
+        "caption_metric": "clip",
+        "caption_score_threshold": 0.35,
+        "caption_max_retries": 2,
     }
     return {**defaults, **config}
 
